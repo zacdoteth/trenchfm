@@ -231,7 +231,7 @@ export default function PodiumTeleport() {
     chars: generateChars(CHAR_COUNT), speaker: null,
     teleportPhase: "idle", // idle, beam_out, beam_in, active, beam_return
     teleportTimer: 0, teleportCharIdx: null, prevSpeaker: null,
-    cameraAngle: 0, cameraHeight: 5, cameraDist: 24, autoRotate: true, spinVelocity: 0, clock: 0,
+    cameraAngle: 0, cameraHeight: 3, cameraDist: 24, autoRotate: true, spinVelocity: 0, clock: 0,
     // Jumbotron debug params (live-tunable via GUI)
     jmboY: 6.9, jmboScale: 0.5, jmboRotSpeed: 0.0,
     // Speaker params
@@ -323,6 +323,7 @@ export default function PodiumTeleport() {
   // Speaker screen position for 3D speech bubble
   const [speakerScreenPos, setSpeakerScreenPos] = useState(null);
   const [bubbleExpanded, setBubbleExpanded] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [typewriterIdx, setTypewriterIdx] = useState(0); // chars revealed so far
   const [typewriterDone, setTypewriterDone] = useState(false); // fully typed + collapsed
   const typewriterRef = useRef(null); // interval handle
@@ -2947,26 +2948,27 @@ export default function PodiumTeleport() {
         </div>
       )}
 
-      {/* ═══ FLOATING CHAT — glass pill HUD feed ═══ */}
-      <div data-ui="1" style={{ position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 9, pointerEvents: "none", padding: "0 10px", display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflow: "hidden", maskImage: "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", WebkitMaskImage: "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)" }}>
-        {chatMessages.slice(-6).map((m, i, arr) => {
+      {/* ═══ FLOATING CHAT — glass pill HUD feed (tap to expand history) ═══ */}
+      <div data-ui="1" onClick={() => setChatExpanded(p => !p)} style={{ position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 9, padding: "0 10px", display: "flex", flexDirection: "column", gap: 2, maxHeight: chatExpanded ? "60vh" : 160, overflow: chatExpanded ? "auto" : "hidden", maskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", WebkitMaskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", scrollbarWidth: "none", msOverflowStyle: "none", transition: "max-height 0.3s ease", WebkitOverflowScrolling: "touch" }}>
+        {(chatExpanded ? chatMessages : chatMessages.slice(-10)).map((m, i, arr) => {
           const userColor = m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`;
           return (
-            <div key={chatMessages.length - 6 + i} style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "5px 10px 5px 8px",
+            <div key={chatExpanded ? i : chatMessages.length - 10 + i} style={{
+              padding: "4px 10px 4px 8px",
               background: "rgba(10,4,14,0.55)",
               backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)",
               borderRadius: 8,
               borderLeft: `2px solid ${userColor}`,
               alignSelf: "flex-start",
-              maxWidth: "85%",
-              animation: `chatBubbleUp ${i === arr.length - 1 ? "6s" : "5s"} ease-out forwards`,
-              opacity: 0,
-              boxShadow: `0 2px 8px rgba(0,0,0,0.3), inset 0 0 12px rgba(${m.user === "trench.fm" ? "255,45,120" : m.user === "you" ? "0,255,136" : "255,255,255"},0.03)`,
+              maxWidth: "88%",
+              animation: chatExpanded ? "none" : `chatBubbleUp 6s ease-out forwards`,
+              opacity: chatExpanded ? 0.9 : 0,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+              fontFamily: "'Inter'", fontSize: 12, lineHeight: 1.35, letterSpacing: -0.2,
             }}>
-              <span style={{ fontFamily: "'Inter'", color: userColor, fontWeight: 700, fontSize: 10.5, letterSpacing: -0.2, whiteSpace: "nowrap" }}>{m.user}</span>
-              <span style={{ fontFamily: "'Inter'", color: "rgba(255,255,255,0.75)", fontWeight: 400, fontSize: 11.5, letterSpacing: -0.2, lineHeight: 1.35 }}>{m.msg}</span>
+              <span style={{ color: userColor, fontWeight: 700, fontSize: 11 }}>{m.user}</span>
+              <span style={{ color: "#555", margin: "0 5px" }}>·</span>
+              <span style={{ color: "rgba(255,255,255,0.75)", fontWeight: 400 }}>{m.msg}</span>
             </div>
           );
         })}
