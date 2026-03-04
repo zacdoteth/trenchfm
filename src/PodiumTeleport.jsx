@@ -236,6 +236,8 @@ export default function PodiumTeleport() {
     speakerScale: 2.2, speakerY: 1.2,
     // Jumbotron intro animation (Mario Party style)
     jmboIntroTimer: 0, jmboIntroName: "", jmboIntroTicker: "", jmboIntroCharIdx: -1,
+    // Dome / sky (Anadol)
+    domeHueShift: 0, domeSpeed: 1.0, domeIntensity: 1.0,
     // Top calls leaderboard
     topCallsToday: [],
   });
@@ -521,26 +523,63 @@ export default function PodiumTeleport() {
 
       // ═══ ANADOL SKY DOME — full sphere, same beautiful flowing pink ═══
       const domeMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 } }, side: THREE.BackSide,
+        uniforms: {
+          uTime: { value: 0 },
+          uHueShift: { value: 0.0 },      // slow hue rotation (0-1 = full cycle)
+          uIntensity: { value: 1.0 },      // brightness
+          uSpeed: { value: 1.0 },          // animation speed
+        },
+        side: THREE.BackSide,
         vertexShader: `varying vec3 vP;varying vec2 vU;void main(){vP=position;vU=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;varying vec3 vP;varying vec2 vU;${ANADOL_GLSL}
-          void main(){float t=uTime;float th=atan(vP.x,vP.z);float ph=acos(clamp(vP.y/50.0,-1.0,1.0));
-          vec2 p=vec2(th*2.0,ph*3.0);
-          float w1=domainWarp(p*0.4,t*0.8,4);float w2=domainWarp(p*0.7+vec2(3.3,7.7),t*0.6,3);
-          float w3=domainWarp(p*0.25+vec2(11.1,4.4),t*1.1,4);
-          float s=(w1*0.5+w2*0.3+w3*0.2)*0.5+0.5;
-          vec3 pink=vec3(1.0,0.18,0.47);vec3 orange=vec3(1.0,0.45,0.1);vec3 purple=vec3(0.6,0.15,1.0);
-          vec3 magenta=vec3(0.85,0.08,0.52);vec3 cyan=vec3(0.0,0.75,1.0);vec3 warm=vec3(1.0,0.85,0.7);
-          vec3 c=mix(magenta,pink,smoothstep(0.2,0.6,s));
-          c=mix(c,orange,smoothstep(0.4,0.8,w2*0.5+0.5));
-          c=mix(c,purple,smoothstep(0.5,0.9,w3*0.5+0.5)*0.6);
-          c=mix(c,cyan,pow(max(0.0,w1*0.5+0.5),3.0)*0.3);
-          c=mix(c,warm,pow(max(0.0,s),4.0)*0.35);
-          float gr=snoise(p*15.0+t*0.5)*0.5+0.5;c*=(0.85+gr*0.3);
-          float br=0.9+sin(t*0.5)*0.1;float i=br*(0.6+s*0.5);
-          vec3 b=vec3(0.05,0.015,0.04);vec3 f=b+c*i;
-          float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.7,3)*0.5+0.5),3.0);
-          f+=warm*hs*0.4;gl_FragColor=vec4(f,1.0);}`,
+        fragmentShader: `uniform float uTime;uniform float uHueShift;uniform float uIntensity;uniform float uSpeed;
+          varying vec3 vP;varying vec2 vU;${ANADOL_GLSL}
+          // Hue rotation in RGB space
+          vec3 hueRotate(vec3 col, float shift) {
+            float angle = shift * 6.28318;
+            float s = sin(angle), c2 = cos(angle);
+            vec3 w = vec3(0.299, 0.587, 0.114);
+            vec3 r;
+            r.x = dot(col, w) + dot(col - vec3(dot(col,w)), vec3(c2, c2, c2)) + dot(cross(w, col), vec3(s, s, s));
+            // Full hue rotation matrix
+            float cosA = c2, sinA = s;
+            mat3 hueRot = mat3(
+              0.299+0.701*cosA+0.168*sinA, 0.587-0.587*cosA+0.330*sinA, 0.114-0.114*cosA-0.497*sinA,
+              0.299-0.299*cosA-0.328*sinA, 0.587+0.413*cosA+0.035*sinA, 0.114-0.114*cosA+0.292*sinA,
+              0.299-0.300*cosA+1.250*sinA, 0.587-0.588*cosA-1.050*sinA, 0.114+0.886*cosA-0.203*sinA
+            );
+            return hueRot * col;
+          }
+          void main(){
+            float t = uTime * uSpeed;
+            // Zen auto-drift: very slow hue rotation over time (full cycle every ~120s)
+            float autoHue = uHueShift + t * 0.0083;
+            float th=atan(vP.x,vP.z);float ph=acos(clamp(vP.y/50.0,-1.0,1.0));
+            vec2 p=vec2(th*2.0,ph*3.0);
+            float w1=domainWarp(p*0.4,t*0.8,4);float w2=domainWarp(p*0.7+vec2(3.3,7.7),t*0.6,3);
+            float w3=domainWarp(p*0.25+vec2(11.1,4.4),t*1.1,4);
+            float s2=(w1*0.5+w2*0.3+w3*0.2)*0.5+0.5;
+            // Base palette — Anadol-style
+            vec3 pink=vec3(1.0,0.18,0.47);vec3 orange=vec3(1.0,0.45,0.1);vec3 purple=vec3(0.6,0.15,1.0);
+            vec3 magenta=vec3(0.85,0.08,0.52);vec3 cyan=vec3(0.0,0.75,1.0);vec3 warm=vec3(1.0,0.85,0.7);
+            vec3 col=mix(magenta,pink,smoothstep(0.2,0.6,s2));
+            col=mix(col,orange,smoothstep(0.4,0.8,w2*0.5+0.5));
+            col=mix(col,purple,smoothstep(0.5,0.9,w3*0.5+0.5)*0.6);
+            col=mix(col,cyan,pow(max(0.0,w1*0.5+0.5),3.0)*0.3);
+            col=mix(col,warm,pow(max(0.0,s2),4.0)*0.35);
+            // Apply zen hue rotation
+            col = hueRotate(col, fract(autoHue));
+            // Grain + brightness
+            float gr=snoise(p*15.0+t*0.5)*0.5+0.5;col*=(0.85+gr*0.3);
+            float br=(0.9+sin(t*0.5)*0.1)*uIntensity;float ii=br*(0.6+s2*0.5);
+            vec3 base=vec3(0.05,0.015,0.04);
+            base = hueRotate(base, fract(autoHue));
+            vec3 f=base+col*ii;
+            // Hot spots
+            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.7,3)*0.5+0.5),3.0);
+            vec3 hotC = hueRotate(warm, fract(autoHue));
+            f+=hotC*hs*0.4;
+            gl_FragColor=vec4(f,1.0);
+          }`,
       });
       scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 64, 64), domeMat));
 
@@ -650,7 +689,7 @@ export default function PodiumTeleport() {
       // Main 4 faces: chart + call data (same on all sides — readable from every angle)
       // Bottom ribbon: 4 detail strips (different data per side)
       // Top ribbon: ticker/price strip (same on all sides)
-      const mainH = 6, botH = 1.8, topH = 1.2;
+      const mainH = 6, botH = 1.8, topH = 2.2;
       // All 4 sides equal — square cross-section like a real NBA jumbotron
       const faceW = 11, halfD = faceW / 2;
       const mainY = 0, botY = mainY - mainH / 2 - botH / 2 - 0.15, topY = mainY + mainH / 2 + topH / 2 + 0.15;
@@ -670,10 +709,10 @@ export default function PodiumTeleport() {
       const jmboBotFaces = [botFront, botBack, botLeft, botRight];
 
       // Top ribbon strips (ticker/price — same on all)
-      const topFront = makeScreenFace(faceW, topH, 1024, 120, 0.005);
-      const topBack  = makeScreenFace(faceW, topH, 1024, 120, 0.005);
-      const topLeft  = makeScreenFace(faceW, topH, 1024, 120, 0.005);
-      const topRight = makeScreenFace(faceW, topH, 1024, 120, 0.005);
+      const topFront = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topBack  = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topLeft  = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topRight = makeScreenFace(faceW, topH, 1024, 200, 0.005);
       const jmboTopFaces = [topFront, topBack, topLeft, topRight];
 
       // Assemble into group — square box, faces at halfD from center
@@ -1124,6 +1163,10 @@ export default function PodiumTeleport() {
         const bf = gui.addFolder("Background");
         bf.add(guiObj, "AmbientInt", 0, 5, 0.1).onChange(v => { scene.children.find(c => c.isAmbientLight).intensity = v; });
         bf.add(guiObj, "SpotInt", 0, 8, 0.1).onChange(v => { spotPink.intensity = v; });
+        guiObj.DomeHue = 0; guiObj.DomeSpeed = 1.0; guiObj.DomeInt = 1.0;
+        bf.add(guiObj, "DomeHue", 0, 1, 0.01).onChange(v => { stateRef.current.domeHueShift = v; }).name("Hue Shift");
+        bf.add(guiObj, "DomeSpeed", 0.1, 3, 0.1).onChange(v => { stateRef.current.domeSpeed = v; }).name("Dome Speed");
+        bf.add(guiObj, "DomeInt", 0.2, 2, 0.05).onChange(v => { stateRef.current.domeIntensity = v; }).name("Dome Bright");
         container.appendChild(gui.domElement);
       }
 
@@ -1159,6 +1202,9 @@ export default function PodiumTeleport() {
         camera.position.y = st.cameraHeight; camera.lookAt(0, 3, 0);
 
         domeMat.uniforms.uTime.value = t;
+        domeMat.uniforms.uHueShift.value = st.domeHueShift;
+        domeMat.uniforms.uSpeed.value = st.domeSpeed;
+        domeMat.uniforms.uIntensity.value = st.domeIntensity;
         floorMat.uniforms.uTime.value = t;
         wallMat.uniforms.uTime.value = t;
         // Toon shader time for emissive pulse
@@ -1442,34 +1488,48 @@ export default function PodiumTeleport() {
 
               if (si) {
                 const pad = 20;
-                const midH = H / 2 + 16;
-                // $TICKER — hero size
-                jx.font = "bold 44px 'Inter', sans-serif";
+                // Row 1: $TICKER + caller name + change
+                const row1Y = H * 0.38;
+                jx.font = "bold 48px 'Inter', sans-serif";
                 jx.fillStyle = "#fff"; jx.textAlign = "left";
-                jx.fillText(si.coin.ticker, pad, midH);
-                let rx = pad + jx.measureText(si.coin.ticker).width + 14;
-                // by caller — SAME size as ticker
-                jx.font = "bold 44px 'Inter', sans-serif";
+                jx.fillText(si.coin.ticker, pad, row1Y);
+                let rx = pad + jx.measureText(si.coin.ticker).width + 16;
+                // Caller name — same weight
+                jx.font = "bold 48px 'Inter', sans-serif";
                 jx.fillStyle = "#ff2d78";
-                jx.fillText(si.name, rx, midH);
-                rx += jx.measureText(si.name).width + 10;
-                // @ followers (smaller, muted)
-                jx.font = "500 20px 'JetBrains Mono', monospace";
+                jx.fillText(si.name, rx, row1Y);
+                rx += jx.measureText(si.name).width + 12;
+                // @ followers
+                jx.font = "500 22px 'JetBrains Mono', monospace";
                 jx.fillStyle = "#555";
-                jx.fillText("@ " + (si.followers || "?"), rx, midH);
-                // Price — SAME size as ticker
-                jx.font = "bold 44px 'JetBrains Mono', monospace";
-                jx.fillStyle = "#fff"; jx.textAlign = "right";
-                jx.fillText("$" + si.coin.price, W - pad, midH);
-                // Change underneath
-                jx.font = "bold 22px 'JetBrains Mono', monospace";
+                jx.fillText("@ " + (si.followers || "?"), rx, row1Y);
+                // Change pill — far right
+                jx.font = "bold 28px 'JetBrains Mono', monospace";
                 jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
-                jx.fillText((si.coin.positive ? "+" : "") + si.coin.change, W - pad, midH + 26);
+                jx.textAlign = "right";
+                jx.fillText((si.coin.positive ? "+" : "") + si.coin.change, W - pad, row1Y);
                 jx.textAlign = "left";
+
+                // Row 2: MC · Price · Liquidity · Supply (Axiom-style stat bar)
+                const row2Y = H * 0.78;
+                let sx = pad;
+                const stat = (label, val, color) => {
+                  jx.font = "500 18px 'Inter', sans-serif";
+                  jx.fillStyle = "#555";
+                  jx.fillText(label, sx, row2Y - 16);
+                  jx.font = "bold 28px 'JetBrains Mono', monospace";
+                  jx.fillStyle = color || "#fff";
+                  jx.fillText(val, sx, row2Y + 12);
+                  sx += Math.max(jx.measureText(val).width, jx.measureText(label).width) + 28;
+                };
+                stat("MC", si.coin.mcap, "#fff");
+                stat("Price", "$" + si.coin.price, "#fff");
+                stat("Liquidity", si.coin.liq || "—", "#00d4ff");
+                stat("Supply", si.coin.supply || "1B", "#999");
               } else {
-                jx.font = "bold 44px 'Inter', sans-serif";
+                jx.font = "bold 52px 'Inter', sans-serif";
                 jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
-                jx.fillText("trench.fm", W / 2, H / 2 + 14);
+                jx.fillText("trench.fm", W / 2, H / 2 + 10);
                 jx.textAlign = "left";
               }
             }
@@ -2130,7 +2190,7 @@ export default function PodiumTeleport() {
 
       {/* TOP BAR */}
       <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "linear-gradient(180deg,rgba(10,0,8,0.92) 60%,transparent 100%)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1 }}>trench.fm</div>
+        <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1, filter: `hue-rotate(${((stateRef.current?.domeHueShift || 0) + (stateRef.current?.clock || 0) * 0.0083) * 360 % 360}deg)` }}>trench.fm</div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {queue.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(255,45,120,0.08)", border: "1px solid rgba(255,45,120,0.2)" }}>
