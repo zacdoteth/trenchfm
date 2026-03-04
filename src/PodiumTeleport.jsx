@@ -230,7 +230,7 @@ export default function PodiumTeleport() {
     chars: generateChars(CHAR_COUNT), speaker: null,
     teleportPhase: "idle", // idle, beam_out, beam_in, active, beam_return
     teleportTimer: 0, teleportCharIdx: null, prevSpeaker: null,
-    cameraAngle: 0, cameraHeight: 3.5, cameraDist: 24, autoRotate: true, spinVelocity: 0, clock: 0,
+    cameraAngle: 0, cameraHeight: 5, cameraDist: 24, autoRotate: true, spinVelocity: 0, clock: 0,
     // Jumbotron debug params (live-tunable via GUI)
     jmboY: 9, jmboScale: 0.5, jmboRotSpeed: 0.0,
     // Speaker params
@@ -238,9 +238,13 @@ export default function PodiumTeleport() {
     // Jumbotron intro animation (Mario Party style)
     jmboIntroTimer: 0, jmboIntroName: "", jmboIntroTicker: "", jmboIntroCharIdx: -1,
     // Dome / sky (Anadol)
-    domeHueShift: 0, domeSpeed: 0.2, domeIntensity: 0.6, domeBottomHalf: true,
-    // Top calls leaderboard
-    topCallsToday: [],
+    domeHueShift: 0.62, domeSpeed: 0.2, domeIntensity: 1.0, domeBottomHalf: true,
+    // Top calls leaderboard — prefilled for demo
+    topCallsToday: [
+      { ticker: "$BONK", change: "+4.2x", caller: "whale_alert", followers: "127K", timeAgo: "12m ago", fdv: "$1.8B", price: "0.00002847" },
+      { ticker: "$WIF", change: "+2.8x", caller: "alpha_leak", followers: "45.2K", timeAgo: "28m ago", fdv: "$890M", price: "2.34" },
+      { ticker: "$POPCAT", change: "+1.6x", caller: "chad_caller", followers: "33.1K", timeAgo: "41m ago", fdv: "$540M", price: "0.89" },
+    ],
   });
   const rendererRef = useRef(null);
   const frameRef = useRef(null);
@@ -310,6 +314,9 @@ export default function PodiumTeleport() {
   // Speaker screen position for 3D speech bubble
   const [speakerScreenPos, setSpeakerScreenPos] = useState(null);
   const [bubbleExpanded, setBubbleExpanded] = useState(false);
+  const [typewriterIdx, setTypewriterIdx] = useState(0); // chars revealed so far
+  const [typewriterDone, setTypewriterDone] = useState(false); // fully typed + collapsed
+  const typewriterRef = useRef(null); // interval handle
   const [caCopied, setCaCopied] = useState(false);
   const copyCA = useCallback((e) => {
     e.stopPropagation();
@@ -363,7 +370,29 @@ export default function PodiumTeleport() {
 
   // Sync refs for jumbotron (animate loop reads these)
   useEffect(() => { chartDataRef.current = chartData; }, [chartData]);
-  useEffect(() => { speakerInfoRef.current = speakerInfo; setBubbleExpanded(false); }, [speakerInfo]);
+  useEffect(() => {
+    speakerInfoRef.current = speakerInfo;
+    setBubbleExpanded(false);
+    // Reset typewriter for new speaker
+    setTypewriterIdx(0); setTypewriterDone(false);
+    if (typewriterRef.current) clearInterval(typewriterRef.current);
+    if (!speakerInfo?.thesis) return;
+    const thesis = speakerInfo.thesis;
+    // Start typewriter after intro (6s) + small buffer
+    const startDelay = setTimeout(() => {
+      let idx = 0;
+      typewriterRef.current = setInterval(() => {
+        idx++;
+        setTypewriterIdx(idx);
+        if (idx >= thesis.length) {
+          clearInterval(typewriterRef.current);
+          // Pause 3s at full reveal, then collapse
+          setTimeout(() => { setTypewriterDone(true); }, 3000);
+        }
+      }, 35);
+    }, 6300); // 6s intro + 300ms buffer
+    return () => { clearTimeout(startDelay); if (typewriterRef.current) clearInterval(typewriterRef.current); };
+  }, [speakerInfo]);
   // Timeframe switch — update chart from stored timeframe data
   useEffect(() => {
     chartTFRef.current = chartTimeframe;
@@ -550,47 +579,73 @@ export default function PodiumTeleport() {
             float w4=domainWarp(p*0.2+vec2(7.7,13.3),t*0.3,4);
             float comp=(w1*0.35+w2*0.30+w3*0.20+w4*0.15)*0.5+0.5;
 
-            // IQ cosine palettes — wealth/abundance/trust color psychology
-            // Greens = growth/money, Cyans = trust/calm, Magentas = excitement/energy, Purples = luxury/premium
-            vec3 pal1=cosPal(w1*0.5+0.5+t*0.02,
-              vec3(0.4,0.25,0.5),vec3(0.45,0.45,0.5),vec3(1.0,0.8,1.0),
-              vec3(autoHue,0.25+autoHue,0.55+autoHue));
-            vec3 pal2=cosPal(w2*0.5+0.5+t*0.015,
-              vec3(0.2,0.45,0.4),vec3(0.35,0.5,0.45),vec3(0.8,1.0,1.2),
-              vec3(0.15+autoHue,0.1+autoHue,0.4+autoHue));
-            vec3 col=mix(pal1,pal2,smoothstep(0.3,0.7,w3*0.5+0.5));
+            // ═══ NEON ANADOL PALETTE — BRIGHT hot pink / electric cyan / lime ═══
+            // palA: Hot neon pink (primary — BRIGHT, not muddy)
+            vec3 palA=cosPal(w1*0.5+0.5+t*0.02,
+              vec3(0.45,0.08,0.35),vec3(0.55,0.12,0.45),vec3(0.8,0.4,0.9),
+              vec3(autoHue*0.3,0.08,0.15+autoHue*0.2));
+            // palB: Electric cyan → blue (secondary — vivid)
+            vec3 palB=cosPal(w2*0.5+0.5+t*0.015,
+              vec3(0.05,0.25,0.40),vec3(0.15,0.55,0.60),vec3(0.7,0.9,0.8),
+              vec3(0.7+autoHue*0.2,0.25,0.05));
+            // palC: Neon lime sparks
+            vec3 palC=cosPal(w4*0.5+0.5+t*0.012,
+              vec3(0.05,0.30,0.05),vec3(0.15,0.65,0.12),vec3(0.5,1.0,0.4),
+              vec3(0.0,0.33+autoHue*0.2,0.67));
 
-            // Iridescent accent — pearlescent luxury
-            vec3 iri=cosPal(comp*2.0+t*0.01,
-              vec3(0.45,0.5,0.6),vec3(0.5,0.45,0.5),vec3(1.0,1.2,1.0),
-              vec3(autoHue*0.5,0.15+autoHue*0.3,0.3+autoHue*0.7));
-            col=mix(col,iri,pow(comp,2.5)*0.4);
+            // ═══ LAYERED COMPOSITION — BRIGHT additive, generous masks ═══
+            float maskA=smoothstep(0.1,0.6,w1*0.5+0.5);
+            float maskB=smoothstep(0.15,0.65,w2*0.5+0.5);
+            float maskC=pow(max(0.0,comp),3.0);
+            vec3 col=palA*maskA*0.85+palB*maskB*0.45+palC*maskC*0.25;
 
-            // Bright bloom hotspots — green/cyan (wealth glow, not orange)
-            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,3)*0.5+0.5),3.5);
-            col+=vec3(0.3,1.0,0.8)*hs*0.3;
+            // ═══ FILAMENT TENDRILS — sharp neon ridges ═══
+            float ridge=pow(abs(w1*w2),3.5);
+            col+=vec3(1.0,0.2,0.6)*ridge*0.18;
 
-            // Deep purple in dark valleys — luxury depth
+            // ═══ EDGE GLOW — cyan at form boundaries ═══
+            float edgeDet=abs(comp-0.5)*2.0;
+            float edgeGl=pow(1.0-edgeDet,2.5);
+            col+=vec3(0.0,0.85,1.0)*edgeGl*0.10;
+
+            // ═══ BLOOM — generous neon peaks ═══
+            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,3)*0.5+0.5),3.0);
+            col+=vec3(1.0,0.15,0.55)*hs*0.40;
+            float hs2=pow(max(0.0,(1.0-comp)*w2*0.5+0.3),2.5);
+            col+=vec3(0.1,0.75,1.0)*hs2*0.12;
+            float limeBloom=pow(max(0.0,w4*0.5+0.5),4.0);
+            col+=vec3(0.2,1.0,0.08)*limeBloom*0.10;
+
+            // ═══ SHADOWS — rich deep purple (never flat black) ═══
             float valley=pow(1.0-comp,2.0);
-            col+=vec3(0.15,0.05,0.35)*valley*0.2;
+            col+=vec3(0.08,0.02,0.14)*valley*0.40;
 
-            // Micro-texture grain
-            float gr=snoise(p*15.0+t*0.5)*0.5+0.5;
-            col*=(0.85+gr*0.3);
+            // ═══ IRIDESCENT SHIMMER ═══
+            vec3 iri=cosPal(comp*2.0+t*0.01,
+              vec3(0.50,0.15,0.50),vec3(0.45,0.30,0.50),vec3(1.0,0.8,1.0),
+              vec3(autoHue*0.3,0.5+autoHue*0.2,0.15+autoHue*0.3));
+            col=mix(col,col+iri*0.15,smoothstep(0.35,0.75,comp));
 
-            // Brightness + breathing
-            float br=(0.9+sin(t*0.5)*0.1)*uIntensity;
-            float ii=br*(0.55+comp*0.55);
+            // ═══ MICRO GRAIN ═══
+            float gr=snoise(p*15.0+t*0.4)*0.5+0.5;
+            col*=(0.92+gr*0.16);
 
-            // Deep saturated base (never pure black)
-            vec3 base=cosPal(autoHue,vec3(0.04,0.01,0.03),vec3(0.02,0.01,0.02),
+            // ═══ BREATHING — gentle, not dimming ═══
+            float br=(0.92+sin(t*0.55)*0.08)*uIntensity;
+            // BRIGHT: dark areas at 0.45 (not black), peaks at full
+            float ii=br*(0.45+comp*0.55);
+
+            // ═══ WARM BASE — pink-tinted, never cold black ═══
+            vec3 base=vec3(0.04,0.012,0.06)+cosPal(autoHue,
+              vec3(0.02,0.008,0.03),vec3(0.015,0.008,0.02),
               vec3(1.0,1.0,1.0),vec3(0.0,0.33,0.67));
             vec3 f=base+col*ii;
 
-            // Hot bloom layer — mint/cyan glow
-            f+=vec3(0.2,0.9,0.7)*hs*0.25;
+            // ═══ NEON BLOOM OVERLAY — extra hot ═══
+            f+=vec3(1.0,0.15,0.55)*hs*0.25;
+            f+=vec3(0.15,0.7,0.06)*limeBloom*0.06;
 
-            // Bottom hemisphere fade — toggleable
+            // Bottom hemisphere fade
             float hNorm=vP.y/50.0;
             if(uBottomHalf<0.5){
               float fade=smoothstep(-0.3,0.15,hNorm);
@@ -610,70 +665,89 @@ export default function PodiumTeleport() {
           void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;vec2 p=vP.xz*0.06;
           float w1=domainWarp(p*0.5,t*0.6,3);float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,3);
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          vec3 c=cosPal(s+ah,vec3(0.25,0.15,0.3),vec3(0.3,0.35,0.3),vec3(1.0,0.8,1.0),vec3(ah,0.25+ah,0.55+ah));
-          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.3,0.25),vec3(0.25,0.35,0.3),vec3(0.8,1.0,1.2),vec3(0.15+ah,0.1+ah,0.4+ah));
+          // Neon Anadol floor — BRIGHT pink/cyan/lime matching dome
+          vec3 c=cosPal(s+ah,vec3(0.35,0.06,0.28),vec3(0.50,0.10,0.40),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
+          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.04,0.20,0.32),vec3(0.12,0.50,0.55),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
           c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
-          float d=length(vP.xz);float pg=smoothstep(10.0,1.0,d)*0.4;float ef=smoothstep(30.0,12.0,d);
-          float r=pow(s,1.5)*0.3+pg;r*=ef;
+          // Lime accent in bright floor areas
+          float limeMask=pow(s,3.0);
+          vec3 lime=cosPal(w1*0.5+0.5+ah,vec3(0.03,0.20,0.03),vec3(0.10,0.55,0.08),vec3(0.5,1.0,0.4),vec3(0.0,0.33+ah*0.2,0.67));
+          c+=lime*limeMask*0.18;
+          float d=length(vP.xz);float pg=smoothstep(10.0,1.0,d)*0.7;float ef=smoothstep(35.0,8.0,d);
+          float r=(s*0.55+0.20)+pg;r*=ef;
+          // Neon grid lines — hot pink
           float gx=smoothstep(0.03,0.0,abs(fract(vP.x*0.5)-0.5));
           float gz=smoothstep(0.03,0.0,abs(fract(vP.z*0.5)-0.5));
-          float g=max(gx,gz)*0.04*ef;
-          vec3 b=vec3(0.02,0.01,0.025);gl_FragColor=vec4(b+c*r+vec3(g*0.5),1.0);}`,
+          float g=max(gx,gz)*0.06*ef;
+          vec3 gridCol=vec3(1.0,0.1,0.5)*g;
+          // Breathing sync
+          float flBr=0.92+sin(uTime*uSpd*0.55)*0.08;
+          vec3 b=vec3(0.02,0.008,0.035);gl_FragColor=vec4(b+c*r*flBr+gridCol,1.0);}`,
       });
       const fg = new THREE.CircleGeometry(ROOM_RADIUS + 5, 96); fg.rotateX(-Math.PI / 2);
       scene.add(new THREE.Mesh(fg, floorMat));
 
-      // ═══ ANADOL WALLS — synced with dome hue ═══
-      const wallMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } }, transparent: true, side: THREE.BackSide,
-        vertexShader: `varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;${ANADOL_GLSL}
-          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
-          float a=atan(vW.x,vW.z);float h=vW.y;vec2 p=vec2(a*2.5,h*0.25);
-          float w1=domainWarp(p*0.6,t*0.7,4);float w2=domainWarp(p*1.0+vec2(4.0,2.0),t*0.5,3);
-          float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          vec3 c=cosPal(s+ah,vec3(0.3,0.2,0.4),vec3(0.4,0.4,0.45),vec3(1.0,0.8,1.0),vec3(ah,0.2+ah,0.5+ah));
-          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.35,0.3),vec3(0.3,0.4,0.35),vec3(0.8,1.0,1.2),vec3(0.1+ah,0.1+ah,0.35+ah));
-          c=mix(c,c2,smoothstep(0.4,0.8,w1*0.5+0.5));
-          // Full beautiful wall — no floor bleed, just gentle fade at very top/bottom edges
-          float hm=smoothstep(0.0,0.5,h)*smoothstep(12.0,10.0,h);
-          float i=pow(s,1.5)*0.55*hm*(0.9+sin(t*0.4+a)*0.1);
-          float gr=snoise(p*12.0+t*0.3)*0.5+0.5;c*=(0.9+gr*0.2);
-          gl_FragColor=vec4(vec3(0.02,0.01,0.025)+c*i,0.85);}`,
-      });
-      const wg = new THREE.CylinderGeometry(ROOM_RADIUS + 1, ROOM_RADIUS + 1, 12, 64, 1, true);
-      const wm = new THREE.Mesh(wg, wallMat); wm.position.y = 6; scene.add(wm);
+      // Walls removed — dome sphere covers everything beautifully
+      const wallMat = { uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0 } } }; // stub for refs
 
-      // Podium — GLSL Anadol shader synced with dome hue
+      // ═══ PODIUM — full Anadol treatment ═══
       const podiumMat = new THREE.ShaderMaterial({
         uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
-        vertexShader: `varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;${ANADOL_GLSL}
+        transparent: true,
+        vertexShader: `varying vec3 vW;varying vec3 vN;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;vN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;varying vec3 vN;${ANADOL_GLSL}
           void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
           float a=atan(vW.x,vW.z);float h=vW.y;
-          vec2 p=vec2(a*3.0,h*2.0);
-          float w1=domainWarp(p*0.8,t*0.8,4);float w2=domainWarp(p*1.2+vec2(2.0,5.0),t*0.6,3);
+          vec2 p=vec2(a*4.0,h*3.0);
+          float w1=domainWarp(p*1.0,t*1.0,4);float w2=domainWarp(p*1.5+vec2(2.0,5.0),t*0.7,3);
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          vec3 c=cosPal(s+ah,vec3(0.3,0.2,0.4),vec3(0.4,0.4,0.45),vec3(1.0,0.8,1.0),vec3(ah,0.2+ah,0.5+ah));
-          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.35,0.3),vec3(0.3,0.4,0.35),vec3(0.8,1.0,1.2),vec3(0.1+ah,0.1+ah,0.35+ah));
+          // Neon Anadol podium — hottest version of the palette (stage is the focal point)
+          vec3 c=cosPal(s+ah,vec3(0.12,0.01,0.10),vec3(0.85,0.12,0.55),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
+          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.01,0.08,0.16),vec3(0.10,0.65,0.70),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
           c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
-          // Bright rim at top edge
-          float rim=smoothstep(1.0,1.2,h)*0.6;
-          float i=pow(s,1.5)*0.55+rim;
-          float gr=snoise(p*10.0+t*0.4)*0.5+0.5;c*=(0.9+gr*0.2);
-          // Emissive glow bloom
-          vec3 bloom=cosPal(ah*2.0,vec3(0.2,0.5,0.4),vec3(0.3,0.3,0.3),vec3(1.0,1.0,1.0),vec3(0.0,0.33,0.67));
-          vec3 f=vec3(0.02,0.01,0.02)+c*i+bloom*0.08;
+          // Neon lime tendrils on podium surface
+          float limePod=pow(max(0.0,domainWarp(p*2.0+vec2(4.0,6.0),t*0.8,3)*0.5+0.5),3.0);
+          c+=vec3(0.12,0.85,0.06)*limePod*0.18;
+          // Bright top surface — neon glow platform
+          float topGlow=smoothstep(1.0,1.22,h)*1.5;
+          float side=(s*0.7+0.2);
+          float i=side+topGlow;
+          // Micro grain
+          float gr=snoise(p*12.0+t*0.5)*0.5+0.5;c*=(0.92+gr*0.16);
+          // Neon bloom on top — hot pink with cyan edge
+          vec3 bloom=cosPal(ah*2.0+t*0.01,vec3(0.5,0.08,0.4),vec3(0.5,0.25,0.5),vec3(1.0,0.8,1.0),vec3(0.0,0.5,0.2));
+          vec3 cyanEdge=vec3(0.0,0.7,1.0)*topGlow*0.15;
+          // Breathing
+          float podBr=0.88+sin(t*0.55/0.2)*0.12;
+          vec3 f=vec3(0.01,0.004,0.02)+c*i*podBr+bloom*topGlow*0.35+cyanEdge;
           gl_FragColor=vec4(f,1.0);}`,
       });
       const podiumMesh = new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 48), podiumMat);
       podiumMesh.position.y = 0.6; scene.add(podiumMesh);
-      // Rings — will be color-synced in animate loop
-      const ringMats = [];
-      [PODIUM_RADIUS + 0.15, PODIUM_RADIUS - 0.6].forEach((r, i) => {
-        const mat = new THREE.MeshBasicMaterial({ color: i === 0 ? 0xff2d78 : 0xb24dff });
-        ringMats.push(mat);
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.05, 8, 64), mat);
+      // ═══ ANADOL RINGS — glowing shader torus rings ═══
+      const ringShader = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
+        transparent: true,
+        vertexShader: `varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;${ANADOL_GLSL}
+          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
+          float a=atan(vW.x,vW.z);
+          float w1=domainWarp(vec2(a*4.0,t*0.5),t*1.2,3);
+          float s=w1*0.5+0.5;
+          // Neon ring — alternating pink/cyan pulse
+          vec3 c=cosPal(s+ah+t*0.02,vec3(0.12,0.02,0.10),vec3(0.80,0.10,0.50),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
+          vec3 c2=vec3(0.0,0.7,1.0)*smoothstep(0.4,0.8,s); // cyan accent
+          float pulse=0.7+0.3*sin(t*3.0+a*2.0);
+          vec3 f=(c+c2*0.3)*pulse*1.4;
+          // Lime sparkle on ring
+          float limeS=pow(max(0.0,sin(a*8.0+t*4.0)*0.5+0.5),8.0)*0.15;
+          f+=vec3(0.1,1.0,0.05)*limeS;
+          gl_FragColor=vec4(f,0.9);}`,
+      });
+      const ringShader2 = ringShader.clone();
+      const ringMats = [ringShader, ringShader2];
+      [PODIUM_RADIUS + 0.2, PODIUM_RADIUS + 0.8].forEach((r, i) => {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.04, 8, 96), ringMats[i]);
         ring.rotation.x = -Math.PI / 2; ring.position.y = 1.22; scene.add(ring);
       });
 
@@ -709,16 +783,26 @@ export default function PodiumTeleport() {
             varying vec2 vUv; varying vec3 vN;
             void main(){
               vec4 screen = texture2D(uScreen, vUv);
-              // LED pixel grid
+              // LED pixel grid — tighter gaps for neon pop
               vec2 px = fract(vUv * uGrid);
-              float grid = smoothstep(0.05, 0.15, px.x) * smoothstep(0.05, 0.15, px.y);
-              vec3 color = screen.rgb * grid * 1.3;
-              // Edge bloom
-              float edge = pow(1.0 - abs(vUv.x - 0.5) * 2.0, 0.3);
-              color *= 0.8 + edge * 0.4;
-              // Scanline
-              float scan = sin(vUv.y * uGrid.y + uTime * 3.0) * 0.03 + 0.97;
+              float grid = smoothstep(0.04, 0.12, px.x) * smoothstep(0.04, 0.12, px.y);
+              // Boost saturation + brightness (LED screens are emissive)
+              vec3 color = screen.rgb;
+              float lum = dot(color, vec3(0.299, 0.587, 0.114));
+              color = mix(vec3(lum), color, 1.25); // +25% saturation
+              color = color * grid * 1.5;
+              // Edge bloom — softer vignette
+              float edge = pow(1.0 - abs(vUv.x - 0.5) * 2.0, 0.25);
+              color *= 0.75 + edge * 0.5;
+              // Phosphor bleed — subtle glow around bright pixels
+              float bloom = dot(color, vec3(0.33)) * 0.12;
+              color += color * bloom;
+              // Scanline — faster, more visible
+              float scan = sin(vUv.y * uGrid.y * 0.5 + uTime * 4.0) * 0.04 + 0.96;
               color *= scan;
+              // Breathing sync
+              float breathe = 0.92 + sin(uTime * 0.55) * 0.08;
+              color *= breathe;
               gl_FragColor = vec4(color, 1.0);
             }`,
           side: THREE.DoubleSide,
@@ -743,18 +827,18 @@ export default function PodiumTeleport() {
       const jmboRight = makeScreenFace(faceW, mainH, 1024, 512, 0.008);
       const jmboFaces = [jmboFront, jmboBack, jmboLeft, jmboRight];
 
-      // Bottom ribbon strips (detail data — different per side)
-      const botFront = makeScreenFace(faceW, botH, 1024, 160, 0.005);
-      const botBack  = makeScreenFace(faceW, botH, 1024, 160, 0.005);
-      const botLeft  = makeScreenFace(faceW, botH, 1024, 160, 0.005);
-      const botRight = makeScreenFace(faceW, botH, 1024, 160, 0.005);
+      // Bottom ribbon strips — tall canvas for big text
+      const botFront = makeScreenFace(faceW, botH, 1024, 320, 0.005);
+      const botBack  = makeScreenFace(faceW, botH, 1024, 320, 0.005);
+      const botLeft  = makeScreenFace(faceW, botH, 1024, 320, 0.005);
+      const botRight = makeScreenFace(faceW, botH, 1024, 320, 0.005);
       const jmboBotFaces = [botFront, botBack, botLeft, botRight];
 
-      // Top ribbon strips (ticker/price — same on all)
-      const topFront = makeScreenFace(faceW, topH, 1024, 280, 0.005);
-      const topBack  = makeScreenFace(faceW, topH, 1024, 280, 0.005);
-      const topLeft  = makeScreenFace(faceW, topH, 1024, 280, 0.005);
-      const topRight = makeScreenFace(faceW, topH, 1024, 280, 0.005);
+      // Top ribbon strips — tall canvas for big text
+      const topFront = makeScreenFace(faceW, topH, 1024, 480, 0.005);
+      const topBack  = makeScreenFace(faceW, topH, 1024, 480, 0.005);
+      const topLeft  = makeScreenFace(faceW, topH, 1024, 480, 0.005);
+      const topRight = makeScreenFace(faceW, topH, 1024, 480, 0.005);
       const jmboTopFaces = [topFront, topBack, topLeft, topRight];
 
       // Assemble into group — square box, faces at halfD from center
@@ -812,6 +896,7 @@ export default function PodiumTeleport() {
       jmboGroup.add(pole);
 
       jmboGroup.position.set(0, stateRef.current.jmboY, 0);
+      jmboGroup.rotation.y = 0;
       scene.add(jmboGroup);
 
       // ═══ TELEPORT BEAM VFX ═══
@@ -888,7 +973,7 @@ export default function PodiumTeleport() {
       // ═══ CONCERT LASERS — emanate from jumbotron structure ═══
       const LASER_COUNT = 6;
       const laserGroup = new THREE.Group();
-      const laserColors = [0xff2d78, 0x00ff88, 0x8844ff, 0xff6622, 0x00d4ff, 0xff2d78];
+      const laserColors = [0xff1a6e, 0x39ff14, 0x00d4ff, 0xff1a6e, 0x39ff14, 0x00d4ff];
       const lasers = [];
       for (let i = 0; i < LASER_COUNT; i++) {
         const geo = new THREE.CylinderGeometry(0.02, 0.02, 30, 4);
@@ -1205,7 +1290,7 @@ export default function PodiumTeleport() {
         const bf = gui.addFolder("Background");
         bf.add(guiObj, "AmbientInt", 0, 5, 0.1).onChange(v => { scene.children.find(c => c.isAmbientLight).intensity = v; });
         bf.add(guiObj, "SpotInt", 0, 8, 0.1).onChange(v => { spotPink.intensity = v; });
-        guiObj.DomeHue = 0; guiObj.DomeSpeed = 0.2; guiObj.DomeInt = 0.6; guiObj.DomeBtm = true;
+        guiObj.DomeHue = 0.62; guiObj.DomeSpeed = 0.2; guiObj.DomeInt = 1.0; guiObj.DomeBtm = true;
         bf.add(guiObj, "DomeHue", 0, 1, 0.01).onChange(v => { stateRef.current.domeHueShift = v; }).name("Hue Shift");
         bf.add(guiObj, "DomeSpeed", 0.01, 3, 0.01).onChange(v => { stateRef.current.domeSpeed = v; }).name("Dome Speed");
         bf.add(guiObj, "DomeInt", 0.1, 2, 0.05).onChange(v => { stateRef.current.domeIntensity = v; }).name("Dome Bright");
@@ -1261,13 +1346,11 @@ export default function PodiumTeleport() {
           threeRef.current.podiumMat.uniforms.uHue.value = st.domeHueShift;
           threeRef.current.podiumMat.uniforms.uSpd.value = st.domeSpeed;
         }
-        // Rings sync with dome hue
-        const autoHueCPU = (st.domeHueShift + t * st.domeSpeed * 0.0083) % 1;
-        const hueAngle = autoHueCPU * Math.PI * 2;
+        // Rings — GLSL shader uniforms
         if (threeRef.current.ringMats) {
-          const rR = 0.4 + 0.4 * Math.cos(hueAngle), rG = 0.6 + 0.3 * Math.cos(hueAngle + 2.094), rB = 0.5 + 0.4 * Math.cos(hueAngle + 4.189);
-          threeRef.current.ringMats[0].color.setRGB(rR, rG, rB);
-          threeRef.current.ringMats[1].color.setRGB(rB, rR * 0.6, rG);
+          threeRef.current.ringMats.forEach(m => {
+            if (m.uniforms) { m.uniforms.uTime.value = t; m.uniforms.uHue.value = st.domeHueShift; m.uniforms.uSpd.value = st.domeSpeed; }
+          });
         }
         // Toon shader time for emissive pulse
         if (threeRef.current.bodyMat) threeRef.current.bodyMat.uniforms.uTime.value = t;
@@ -1306,80 +1389,136 @@ export default function PodiumTeleport() {
             function renderIntroFace(jx, W, H) {
               jx.clearRect(0, 0, W, H);
               const introT = st.jmboIntroTimer;
-              const progress = 1 - (introT / 5); // 0→1 over 5 seconds
+              const p = 1 - (introT / 6); // 0→1 over 6 seconds
+              const cx = W / 2, cy = H * 0.38;
 
-              // Animated background — dark with sweeping pink/cyan beams
-              jx.fillStyle = "#04010e"; jx.fillRect(0, 0, W, H);
-              // Diagonal light beams
-              const beamAngle = progress * Math.PI * 2;
-              for (let b = 0; b < 6; b++) {
-                const bx = W / 2 + Math.cos(beamAngle + b * 1.05) * W * 0.8;
-                const by = H / 2 + Math.sin(beamAngle + b * 1.05) * H * 0.5;
-                const bGrad = jx.createRadialGradient(W / 2, H / 2, 0, bx, by, W * 0.5);
-                bGrad.addColorStop(0, b % 2 === 0 ? "rgba(255,45,120,0.08)" : "rgba(0,212,255,0.06)");
-                bGrad.addColorStop(1, "rgba(0,0,0,0)");
-                jx.fillStyle = bGrad; jx.fillRect(0, 0, W, H);
+              // ── PHASE 0: Black void + radial burst ──
+              jx.fillStyle = "#02000a"; jx.fillRect(0, 0, W, H);
+
+              // Radial speed lines (zoom burst)
+              if (p > 0.05) {
+                const burstP = Math.min((p - 0.05) * 3, 1);
+                for (let r = 0; r < 24; r++) {
+                  const ang = (r / 24) * Math.PI * 2 + p * 1.5;
+                  const inner = 60 + burstP * 40;
+                  const outer = inner + 80 + burstP * W * 0.6;
+                  jx.save(); jx.translate(cx, cy);
+                  jx.rotate(ang);
+                  const lg = jx.createLinearGradient(0, inner, 0, outer);
+                  const c = r % 3 === 0 ? "255,45,120" : r % 3 === 1 ? "0,212,255" : "57,255,20";
+                  lg.addColorStop(0, `rgba(${c},${0.15 * burstP})`);
+                  lg.addColorStop(1, "rgba(0,0,0,0)");
+                  jx.fillStyle = lg;
+                  jx.fillRect(-2.5, inner, 5, outer - inner);
+                  jx.restore();
+                }
               }
 
-              // Phase 1 (0-2s): PFP zooms in with burst
-              // Phase 2 (2-3.5s): Name + "CALLS" + ticker fly in
-              // Phase 3 (3.5-5s): Fade to chart
+              // Sweeping spotlight beams
+              for (let b = 0; b < 4; b++) {
+                const bAng = p * Math.PI * 3 + b * Math.PI / 2;
+                const bx = cx + Math.cos(bAng) * W * 0.5;
+                const by = cy + Math.sin(bAng) * H * 0.4;
+                const bg = jx.createRadialGradient(cx, cy, 0, bx, by, W * 0.45);
+                bg.addColorStop(0, b % 2 === 0 ? "rgba(255,45,120,0.12)" : "rgba(0,212,255,0.10)");
+                bg.addColorStop(1, "rgba(0,0,0,0)");
+                jx.fillStyle = bg; jx.fillRect(0, 0, W, H);
+              }
 
-              const centerX = W / 2, centerY = H / 2 - 30;
-
-              // ── PFP circle (center) ──
-              const pfpSize = Math.min(progress * 3, 1) * 140;
+              // ── PHASE 1 (0-0.3): PFP SLAMS in — fast scale + overshoot bounce ──
               const pfpImg = pfpImgsRef.current[st.jmboIntroCharIdx % pfpImgsRef.current.length];
-              if (pfpImg && pfpImg.naturalWidth && pfpSize > 10) {
-                // Glow ring
-                jx.beginPath(); jx.arc(centerX, centerY, pfpSize / 2 + 8, 0, Math.PI * 2);
+              const maxPfp = 220;
+              let pfpScale = 0;
+              if (p < 0.15) pfpScale = 0;
+              else if (p < 0.28) { const t2 = (p - 0.15) / 0.13; pfpScale = t2 < 0.6 ? t2 / 0.6 * 1.3 : 1.3 - (t2 - 0.6) / 0.4 * 0.3; }
+              else pfpScale = 1;
+              const pfpSz = maxPfp * pfpScale;
+
+              if (pfpImg && pfpImg.naturalWidth && pfpSz > 5) {
+                // Outer shockwave rings
+                if (p > 0.2 && p < 0.6) {
+                  const ringP = (p - 0.2) / 0.4;
+                  for (let rr = 0; rr < 3; rr++) {
+                    const rDelay = rr * 0.15;
+                    const rP = Math.max(0, Math.min(1, (ringP - rDelay) * 2));
+                    if (rP > 0) {
+                      const rRad = pfpSz / 2 + 20 + rP * 180;
+                      jx.beginPath(); jx.arc(cx, cy, rRad, 0, Math.PI * 2);
+                      jx.strokeStyle = `rgba(255,45,120,${0.5 * (1 - rP)})`;
+                      jx.lineWidth = 3 * (1 - rP); jx.stroke();
+                    }
+                  }
+                }
+
+                // Hot pink glow behind PFP
+                const glowRad = pfpSz / 2 + 30;
+                const gGrad = jx.createRadialGradient(cx, cy, pfpSz / 4, cx, cy, glowRad);
+                gGrad.addColorStop(0, "rgba(255,45,120,0.35)");
+                gGrad.addColorStop(0.6, "rgba(255,45,120,0.1)");
+                gGrad.addColorStop(1, "rgba(0,0,0,0)");
+                jx.fillStyle = gGrad; jx.beginPath(); jx.arc(cx, cy, glowRad, 0, Math.PI * 2); jx.fill();
+
+                // Spinning ring
+                jx.save(); jx.translate(cx, cy); jx.rotate(p * 6);
+                jx.beginPath(); jx.arc(0, 0, pfpSz / 2 + 12, 0, Math.PI * 1.5);
                 jx.strokeStyle = "#ff2d78"; jx.lineWidth = 4;
-                jx.shadowColor = "#ff2d78"; jx.shadowBlur = 30; jx.stroke(); jx.shadowBlur = 0;
-                // Outer ring pulse
-                const pulse = 1 + Math.sin(progress * 12) * 0.05;
-                jx.beginPath(); jx.arc(centerX, centerY, (pfpSize / 2 + 16) * pulse, 0, Math.PI * 2);
-                jx.strokeStyle = "rgba(255,45,120,0.3)"; jx.lineWidth = 2; jx.stroke();
-                // PFP image clipped to circle
+                jx.shadowColor = "#ff2d78"; jx.shadowBlur = 20; jx.stroke(); jx.shadowBlur = 0;
+                jx.restore();
+
+                // Static ring
+                jx.beginPath(); jx.arc(cx, cy, pfpSz / 2 + 6, 0, Math.PI * 2);
+                jx.strokeStyle = "rgba(0,212,255,0.5)"; jx.lineWidth = 2; jx.stroke();
+
+                // PFP clipped to circle
                 jx.save();
-                jx.beginPath(); jx.arc(centerX, centerY, pfpSize / 2, 0, Math.PI * 2); jx.clip();
-                jx.drawImage(pfpImg, centerX - pfpSize / 2, centerY - pfpSize / 2, pfpSize, pfpSize);
+                jx.beginPath(); jx.arc(cx, cy, pfpSz / 2, 0, Math.PI * 2); jx.clip();
+                jx.drawImage(pfpImg, cx - pfpSz / 2, cy - pfpSz / 2, pfpSz, pfpSz);
                 jx.restore();
               }
 
-              // ── "username CALLS $TICKER" text ──
-              if (progress > 0.35) {
-                const textAlpha = Math.min((progress - 0.35) * 4, 1);
-                const slideIn = (1 - textAlpha) * 40;
-                const nameY = centerY + pfpSize / 2 + 50 + slideIn;
+              // ── PHASE 2 (0.3-0.55): NAME slams up from below ──
+              if (p > 0.3) {
+                const nameP = Math.min((p - 0.3) / 0.15, 1);
+                const eased = nameP < 1 ? 1 - Math.pow(1 - nameP, 3) : 1; // ease-out cubic
+                const slideUp = (1 - eased) * 80;
+                const nameY = cy + maxPfp / 2 + 55 + slideUp;
 
-                // Caller name — big bold
-                jx.globalAlpha = textAlpha;
-                jx.font = "bold 42px 'Inter', sans-serif";
+                jx.globalAlpha = eased;
+                jx.font = "bold 72px 'Inter', sans-serif";
                 jx.fillStyle = "#fff"; jx.textAlign = "center";
-                jx.shadowColor = "rgba(255,255,255,0.3)"; jx.shadowBlur = 10;
-                jx.fillText(st.jmboIntroName, centerX, nameY);
+                jx.shadowColor = "rgba(255,255,255,0.5)"; jx.shadowBlur = 16;
+                jx.fillText(st.jmboIntroName, cx, nameY);
                 jx.shadowBlur = 0;
 
-                // "CALLS" — smaller, pink
-                if (progress > 0.5) {
-                  const callsAlpha = Math.min((progress - 0.5) * 5, 1);
-                  jx.globalAlpha = callsAlpha;
-                  jx.font = "bold 24px 'Inter', sans-serif";
+                // ── PHASE 2b: "C A L L S" flies in ──
+                if (p > 0.45) {
+                  const callsP = Math.min((p - 0.45) / 0.1, 1);
+                  jx.globalAlpha = callsP;
+                  jx.font = "bold 36px 'Inter', sans-serif";
                   jx.fillStyle = "#ff2d78";
-                  jx.fillText("C A L L S", centerX, nameY + 36);
+                  jx.shadowColor = "#ff2d78"; jx.shadowBlur = 12;
+                  const spacing = 8 + (1 - callsP) * 20; // letters fly apart then tighten
+                  jx.letterSpacing = spacing + "px";
+                  jx.fillText("C A L L S", cx, nameY + 48);
+                  jx.letterSpacing = "0px";
+                  jx.shadowBlur = 0;
                 }
 
-                // $TICKER — huge, glowing
-                if (progress > 0.6) {
-                  const tickAlpha = Math.min((progress - 0.6) * 4, 1);
-                  const tickScale = 0.8 + tickAlpha * 0.2;
-                  jx.globalAlpha = tickAlpha;
-                  jx.save();
-                  jx.translate(centerX, nameY + 85);
-                  jx.scale(tickScale, tickScale);
-                  jx.font = "bold 72px 'Inter', sans-serif";
+                // ── PHASE 3 (0.55+): $TICKER — BIG, punchy, glowing green ──
+                if (p > 0.55) {
+                  const tickP = Math.min((p - 0.55) / 0.15, 1);
+                  const tickEase = tickP < 1 ? 1 - Math.pow(1 - tickP, 3) : 1;
+                  const tickScale = 0.5 + tickEase * 0.5;
+                  const tickY = nameY + 110;
+
+                  jx.globalAlpha = tickEase;
+                  jx.save(); jx.translate(cx, tickY); jx.scale(tickScale, tickScale);
+                  jx.font = "bold 120px 'Inter', sans-serif";
                   jx.fillStyle = "#00ff88";
-                  jx.shadowColor = "#00ff88"; jx.shadowBlur = 25;
+                  jx.shadowColor = "#00ff88"; jx.shadowBlur = 40;
+                  jx.fillText(st.jmboIntroTicker, 0, 0);
+                  // Double glow
+                  jx.shadowBlur = 80; jx.globalAlpha = tickEase * 0.3;
                   jx.fillText(st.jmboIntroTicker, 0, 0);
                   jx.shadowBlur = 0;
                   jx.restore();
@@ -1387,18 +1526,29 @@ export default function PodiumTeleport() {
                 jx.globalAlpha = 1;
               }
 
-              // ── Sparkle particles ──
+              // ── Scanlines overlay ──
+              jx.fillStyle = "rgba(0,0,0,0.08)";
+              for (let sl = 0; sl < H; sl += 4) { jx.fillRect(0, sl, W, 2); }
+
+              // ── Sparkle particles (more + bigger) ──
               jx.textAlign = "left";
-              if (progress > 0.2) {
-                for (let s = 0; s < 12; s++) {
-                  const sx = (Math.sin(s * 2.1 + t * 3) * 0.5 + 0.5) * W;
-                  const sy = (Math.cos(s * 1.7 + t * 2.5) * 0.5 + 0.5) * H;
-                  const ss = 2 + Math.sin(t * 5 + s) * 1.5;
+              if (p > 0.15) {
+                for (let s = 0; s < 20; s++) {
+                  const sx = (Math.sin(s * 2.1 + t * 3.5) * 0.5 + 0.5) * W;
+                  const sy = (Math.cos(s * 1.7 + t * 3) * 0.5 + 0.5) * H;
+                  const ss = 3 + Math.sin(t * 6 + s * 1.3) * 2;
                   jx.beginPath(); jx.arc(sx, sy, ss, 0, Math.PI * 2);
-                  jx.fillStyle = s % 3 === 0 ? "rgba(255,45,120,0.6)" : s % 3 === 1 ? "rgba(0,255,136,0.5)" : "rgba(0,212,255,0.5)";
-                  jx.fill();
+                  const sc = s % 3 === 0 ? "255,45,120" : s % 3 === 1 ? "0,255,136" : "0,212,255";
+                  jx.fillStyle = `rgba(${sc},0.7)`;
+                  jx.shadowColor = `rgba(${sc},0.8)`; jx.shadowBlur = 8;
+                  jx.fill(); jx.shadowBlur = 0;
                 }
               }
+
+              // ── Edge vignette ──
+              const vig = jx.createRadialGradient(cx, H / 2, H * 0.3, cx, H / 2, H * 0.8);
+              vig.addColorStop(0, "rgba(0,0,0,0)"); vig.addColorStop(1, "rgba(2,0,10,0.6)");
+              jx.fillStyle = vig; jx.fillRect(0, 0, W, H);
             }
 
             // ── renderMainFace — chart hero (shown after intro) ──
@@ -1527,9 +1677,106 @@ export default function PodiumTeleport() {
               }
             }
 
-            // ALL 4 main faces — intro splash during first 5s, then chart
+            // ── renderSideFace — "TOP CALLS TODAY" JUMBOTRON leaderboard ──
+            function renderSideFace(jx, W, H) {
+              jx.clearRect(0, 0, W, H);
+              const bg2 = jx.createLinearGradient(0, 0, 0, H);
+              bg2.addColorStop(0, "#0a041e"); bg2.addColorStop(1, "#060212");
+              jx.fillStyle = bg2; jx.fillRect(0, 0, W, H);
+
+              const calls = st.topCallsToday || [];
+              const pad = 28;
+              const fSz = 72; // 2x the ribbon text — JUMBOTRON
+
+              // Title
+              jx.font = `bold ${fSz}px 'Inter', sans-serif`;
+              jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
+              jx.shadowColor = "#ff2d78"; jx.shadowBlur = 20;
+              jx.fillText("TOP CALLS TODAY", W / 2, fSz + 10);
+              jx.shadowBlur = 0;
+
+              // Divider
+              jx.strokeStyle = "rgba(255,45,120,0.4)"; jx.lineWidth = 2;
+              jx.beginPath(); jx.moveTo(pad, fSz + 28); jx.lineTo(W - pad, fSz + 28); jx.stroke();
+
+              if (calls.length === 0) {
+                jx.font = `500 ${fSz * 0.6 | 0}px 'Inter', sans-serif`;
+                jx.fillStyle = "#444"; jx.textAlign = "center";
+                jx.fillText("Waiting for calls...", W / 2, H / 2);
+                jx.font = `bold ${fSz * 0.5 | 0}px 'JetBrains Mono', monospace`;
+                jx.fillStyle = "#00ff88";
+                jx.fillText("● LIVE", W / 2, H / 2 + fSz * 0.7);
+                jx.textAlign = "left";
+                return;
+              }
+
+              const startY = fSz + 48;
+              const rowH = (H - startY - 10) / 3;
+              const medals = ["#FFD700", "#C0C0C0", "#CD7F32"];
+
+              calls.forEach((call, idx) => {
+                const rowY = startY + idx * rowH + rowH * 0.55;
+
+                // Alternating row bg
+                if (idx % 2 === 0) {
+                  jx.fillStyle = "rgba(255,255,255,0.02)";
+                  jx.fillRect(0, startY + idx * rowH, W, rowH);
+                }
+
+                // SINGLE ROW: #rank $TICKER by caller @ fdv · time · +Xx
+                jx.textAlign = "left";
+                let lx = pad;
+
+                // Rank medal
+                jx.font = `bold ${fSz * 0.7 | 0}px 'JetBrains Mono', monospace`;
+                jx.fillStyle = medals[idx] || "#888";
+                jx.fillText((idx + 1) + ".", lx, rowY);
+                lx += jx.measureText((idx + 1) + ".").width + 10;
+
+                // $TICKER
+                jx.font = `bold ${fSz}px 'Inter', sans-serif`;
+                jx.fillStyle = "#fff";
+                jx.fillText(call.ticker, lx, rowY);
+                lx += jx.measureText(call.ticker).width + 14;
+
+                // "by"
+                jx.font = `500 ${fSz * 0.45 | 0}px 'Inter', sans-serif`;
+                jx.fillStyle = "#666";
+                jx.fillText("by", lx, rowY);
+                lx += jx.measureText("by").width + 10;
+
+                // Caller name
+                jx.font = `bold ${fSz * 0.75 | 0}px 'Inter', sans-serif`;
+                jx.fillStyle = "#ff2d78";
+                jx.fillText(call.caller, lx, rowY);
+                lx += jx.measureText(call.caller).width + 12;
+
+                // @ fdv · time
+                jx.font = `500 ${fSz * 0.45 | 0}px 'JetBrains Mono', monospace`;
+                jx.fillStyle = "#555";
+                jx.fillText("@ " + call.fdv + " · " + call.timeAgo, lx, rowY);
+
+                // Change — far right, neon glow
+                const isPos2 = call.change.startsWith("+");
+                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
+                jx.fillStyle = isPos2 ? "#00ff88" : "#ff4444";
+                jx.shadowColor = isPos2 ? "#00ff88" : "#ff4444";
+                jx.shadowBlur = 14; jx.textAlign = "right";
+                jx.fillText(call.change, W - pad, rowY);
+                jx.shadowBlur = 0;
+
+                // Row separator
+                if (idx < calls.length - 1) {
+                  jx.strokeStyle = "rgba(255,45,120,0.15)"; jx.lineWidth = 1;
+                  jx.beginPath(); jx.moveTo(pad, startY + (idx + 1) * rowH); jx.lineTo(W - pad, startY + (idx + 1) * rowH); jx.stroke();
+                }
+              });
+              jx.textAlign = "left";
+            }
+
+            // FRONT/BACK = chart, LEFT/RIGHT = leaderboard
             const showIntro = st.jmboIntroTimer > 0;
-            [0, 1, 2, 3].forEach(i => {
+            [0, 1].forEach(i => {
               const f = T.jmboFaces[i];
               if (showIntro) {
                 renderIntroFace(f.ctx, f.canvas.width, f.canvas.height);
@@ -1538,79 +1785,130 @@ export default function PodiumTeleport() {
               }
               f.tex.needsUpdate = true;
             });
+            [2, 3].forEach(i => {
+              const f = T.jmboFaces[i];
+              if (showIntro) {
+                renderIntroFace(f.ctx, f.canvas.width, f.canvas.height);
+              } else {
+                renderSideFace(f.ctx, f.canvas.width, f.canvas.height);
+              }
+              f.tex.needsUpdate = true;
+            });
 
-            // ── TOP RIBBON: $TICKER by caller @ followers · MC $XXX ──
+            // ── TOP RIBBON: scrolling marquee — PFP $TICKER %chg 🔵caller @foll ──
             function renderTopRibbon(jx, W, H) {
               jx.clearRect(0, 0, W, H);
               jx.fillStyle = "#06021a"; jx.fillRect(0, 0, W, H);
-              const edgeG = jx.createLinearGradient(0, H - 4, 0, H);
-              edgeG.addColorStop(0, "rgba(255,45,120,0)"); edgeG.addColorStop(1, "rgba(255,45,120,0.25)");
-              jx.fillStyle = edgeG; jx.fillRect(0, H - 4, W, 4);
+              const edgeG = jx.createLinearGradient(0, H - 6, 0, H);
+              edgeG.addColorStop(0, "rgba(255,45,120,0)"); edgeG.addColorStop(1, "rgba(255,45,120,0.35)");
+              jx.fillStyle = edgeG; jx.fillRect(0, H - 6, W, 6);
 
               if (si) {
-                const pad = 20;
-                const fSz = 56; // unified font size for both rows
-                // ── ROW 1: PFP + $TICKER + %change + "by" + caller @followers ──
-                const row1Y = H * 0.34;
-                const pfpSize = 54;
-                const pfpImg = pfpImgsRef.current[st.jmboIntroCharIdx >= 0 ? st.jmboIntroCharIdx % pfpImgsRef.current.length : 0];
-                let lx = pad;
-                if (pfpImg && pfpImg.naturalWidth) {
-                  jx.save();
-                  jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 3, pfpSize / 2, 0, Math.PI * 2); jx.clip();
-                  jx.drawImage(pfpImg, lx, row1Y - pfpSize / 3 - pfpSize / 2, pfpSize, pfpSize);
-                  jx.restore();
-                  jx.strokeStyle = "#ff2d78"; jx.lineWidth = 2;
-                  jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 3, pfpSize / 2 + 2, 0, Math.PI * 2); jx.stroke();
-                  lx += pfpSize + 14;
-                }
-                // $TICKER
-                jx.font = `bold ${fSz}px 'Inter', sans-serif`;
-                jx.fillStyle = "#fff"; jx.textAlign = "left";
-                jx.fillText(si.coin.ticker, lx, row1Y);
-                lx += jx.measureText(si.coin.ticker).width + 12;
-                // % change right next to ticker
-                const chgTxt = si.coin.change;
-                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
-                jx.shadowColor = si.coin.positive ? "#00ff88" : "#ff4444";
-                jx.shadowBlur = 10;
-                jx.fillText(chgTxt, lx, row1Y);
-                jx.shadowBlur = 0;
-                lx += jx.measureText(chgTxt).width + 16;
-                // "by"
-                jx.font = `500 ${fSz * 0.55 | 0}px 'Inter', sans-serif`;
-                jx.fillStyle = "#555";
-                jx.fillText("by", lx, row1Y);
-                lx += jx.measureText("by").width + 10;
-                // Caller name
-                jx.font = `bold ${fSz}px 'Inter', sans-serif`;
-                jx.fillStyle = "#ff2d78";
-                jx.fillText(si.name, lx, row1Y);
-                lx += jx.measureText(si.name).width + 10;
-                // @followers
-                jx.font = `500 ${fSz * 0.5 | 0}px 'JetBrains Mono', monospace`;
-                jx.fillStyle = "#555";
-                jx.fillText("@" + (si.followers || "?"), lx, row1Y);
+                const fSz = 90;
+                const pfpSize = 90;
+                const cpSz = fSz * 0.75;
+                const row1Y = H * 0.36;
+                const row2Y = H * 0.82;
+                const scrollSpeed = 60; // px/sec
+                const gap = 120; // space between repeats
 
-                // ── ROW 2: MC · Price · Liquidity · Supply (same size as row 1) ──
-                const row2Y = H * 0.80;
-                let sx = pad;
-                const stat = (val, color) => {
+                // ── Row 1 draw helper: returns total width ──
+                const pfpImg = pfpImgsRef.current[st.jmboIntroCharIdx >= 0 ? st.jmboIntroCharIdx % pfpImgsRef.current.length : 0];
+                const callerPfpIdx = PFP_NAMES.indexOf(si.name);
+                const callerPfpImg = callerPfpIdx >= 0 ? pfpImgsRef.current[callerPfpIdx % pfpImgsRef.current.length] : null;
+                const drawRow1 = (ox) => {
+                  let lx = ox;
+                  // Coin PFP
+                  if (pfpImg && pfpImg.naturalWidth) {
+                    jx.save();
+                    jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 4, pfpSize / 2, 0, Math.PI * 2); jx.clip();
+                    jx.drawImage(pfpImg, lx, row1Y - pfpSize / 4 - pfpSize / 2, pfpSize, pfpSize);
+                    jx.restore();
+                    jx.strokeStyle = "#ff2d78"; jx.lineWidth = 3;
+                    jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 4, pfpSize / 2 + 3, 0, Math.PI * 2); jx.stroke();
+                    lx += pfpSize + 18;
+                  }
+                  // $TICKER
+                  jx.font = `bold ${fSz}px 'Inter', sans-serif`;
+                  jx.fillStyle = "#fff"; jx.textAlign = "left";
+                  jx.fillText(si.coin.ticker, lx, row1Y);
+                  lx += jx.measureText(si.coin.ticker).width + 14;
+                  // % change
+                  const chgTxt = si.coin.change;
                   jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                  jx.fillStyle = color || "#fff";
-                  jx.textAlign = "left";
-                  jx.fillText(val, sx, row2Y);
-                  sx += jx.measureText(val).width + 20;
+                  jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
+                  jx.shadowColor = si.coin.positive ? "#00ff88" : "#ff4444";
+                  jx.shadowBlur = 14;
+                  jx.fillText(chgTxt, lx, row1Y);
+                  jx.shadowBlur = 0;
+                  lx += jx.measureText(chgTxt).width + 18;
+                  // Caller PFP circle
+                  const cpCy = row1Y - cpSz / 3;
+                  if (callerPfpImg && callerPfpImg.naturalWidth) {
+                    jx.save();
+                    jx.beginPath(); jx.arc(lx + cpSz / 2, cpCy, cpSz / 2, 0, Math.PI * 2); jx.clip();
+                    jx.drawImage(callerPfpImg, lx, cpCy - cpSz / 2, cpSz, cpSz);
+                    jx.restore();
+                    jx.strokeStyle = "#ff2d78"; jx.lineWidth = 2;
+                    jx.beginPath(); jx.arc(lx + cpSz / 2, cpCy, cpSz / 2 + 2, 0, Math.PI * 2); jx.stroke();
+                    lx += cpSz + 10;
+                  }
+                  // Caller name
+                  jx.font = `bold ${fSz}px 'Inter', sans-serif`;
+                  jx.fillStyle = "#ff2d78";
+                  jx.fillText(si.name, lx, row1Y);
+                  lx += jx.measureText(si.name).width + 12;
+                  // @followers
+                  jx.font = `500 ${fSz * 0.45 | 0}px 'JetBrains Mono', monospace`;
+                  jx.fillStyle = "#555";
+                  jx.fillText("@" + (si.followers || "?"), lx, row1Y);
+                  lx += jx.measureText("@" + (si.followers || "?")).width;
+                  return lx - ox; // total width
                 };
-                stat(si.coin.mcap, "#fff");
-                stat("$" + si.coin.price, "#ccc");
-                stat(si.coin.liq || "—", "#00d4ff");
-                stat(si.coin.supply || "1B", "#777");
+
+                // ── Row 2 draw helper ──
+                const r2Stats = [
+                  [si.coin.mcap, "#fff"], ["$" + si.coin.price, "#ccc"],
+                  [si.coin.liq || "—", "#00d4ff"], [si.coin.supply || "1B", "#777"],
+                ];
+                const drawRow2 = (ox) => {
+                  let sx = ox;
+                  r2Stats.forEach(([val, color]) => {
+                    jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
+                    jx.fillStyle = color; jx.textAlign = "left";
+                    jx.fillText(val, sx, row2Y);
+                    sx += jx.measureText(val).width + 24;
+                  });
+                  return sx - ox;
+                };
+
+                // Measure widths (dry run outside clip)
+                jx.save(); jx.globalAlpha = 0;
+                const w1 = drawRow1(0); const w2 = drawRow2(0);
+                jx.restore();
+
+                // ── Scroll + clip each row ──
+                jx.save();
+                jx.beginPath(); jx.rect(0, 0, W, H * 0.55); jx.clip();
+                if (w1 > W - 20) {
+                  const loop1 = w1 + gap;
+                  const off1 = -((st.clock * scrollSpeed) % loop1);
+                  drawRow1(off1); drawRow1(off1 + loop1);
+                } else { drawRow1(24); }
+                jx.restore();
+
+                jx.save();
+                jx.beginPath(); jx.rect(0, H * 0.55, W, H * 0.5); jx.clip();
+                if (w2 > W - 20) {
+                  const loop2 = w2 + gap;
+                  const off2 = -((st.clock * scrollSpeed * 0.8) % loop2); // slightly slower
+                  drawRow2(off2); drawRow2(off2 + loop2);
+                } else { drawRow2(24); }
+                jx.restore();
               } else {
-                jx.font = "bold 60px 'Inter', sans-serif";
+                jx.font = "bold 100px 'Inter', sans-serif";
                 jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
-                jx.fillText("trench.fm", W / 2, H / 2 + 14);
+                jx.fillText("trench.fm", W / 2, H / 2 + 20);
                 jx.textAlign = "left";
               }
             }
@@ -1619,121 +1917,120 @@ export default function PodiumTeleport() {
               f.tex.needsUpdate = true;
             });
 
-            // ── BOTTOM RIBBON: 4 different detail strips ──
+            // ── BOTTOM RIBBON: 4 different detail strips (SAME text size as top) ──
             function renderBotRibbon(jx, W, H, side) {
               jx.clearRect(0, 0, W, H);
               jx.fillStyle = "#04010e"; jx.fillRect(0, 0, W, H);
               // Top edge glow
-              const edgeGlow = jx.createLinearGradient(0, 0, 0, 4);
-              edgeGlow.addColorStop(0, "rgba(255,45,120,0.25)"); edgeGlow.addColorStop(1, "rgba(255,45,120,0)");
-              jx.fillStyle = edgeGlow; jx.fillRect(0, 0, W, 4);
+              const edgeGlow = jx.createLinearGradient(0, 0, 0, 6);
+              edgeGlow.addColorStop(0, "rgba(255,45,120,0.35)"); edgeGlow.addColorStop(1, "rgba(255,45,120,0)");
+              jx.fillStyle = edgeGlow; jx.fillRect(0, 0, W, 6);
 
               if (!si) {
-                // Idle: show watching count
-                jx.font = "500 28px 'JetBrains Mono', monospace";
+                jx.font = "bold 48px 'JetBrains Mono', monospace";
                 jx.fillStyle = "#00ff88"; jx.textAlign = "center";
-                jx.fillText("● " + (400 + Math.floor(Math.random() * 50)) + " watching", W / 2, H / 2 + 10);
+                jx.fillText("● " + (400 + Math.floor(Math.random() * 50)) + " watching", W / 2, H / 2 + 16);
                 jx.textAlign = "left";
                 return;
               }
               const pad = 24;
+              const fSz = 80; // JUMBOTRON — big readable text (320px canvas)
               const tx2 = si.txStats || {};
               const midY = H / 2;
 
-              // ── NBA 2-digit countdown timer (shared across all sides) ──
+              // ── NBA countdown timer (shared) ──
               const timeLeft = speakerTimeRef.current;
               const secs = Math.ceil(timeLeft);
               const timeStr = String(secs).padStart(2, "0");
               const clockColor = timeLeft > 15 ? "#ff2d78" : timeLeft > 7 ? "#ffa500" : "#ff4444";
 
-              // Timer progress bar at very bottom of every side
-              jx.fillStyle = "rgba(255,255,255,0.04)"; jx.fillRect(0, H - 5, W, 5);
-              jx.fillStyle = clockColor; jx.fillRect(0, H - 5, W * (timeLeft / 45), 5);
+              // Timer progress bar
+              jx.fillStyle = "rgba(255,255,255,0.04)"; jx.fillRect(0, H - 6, W, 6);
+              jx.fillStyle = clockColor; jx.fillRect(0, H - 6, W * (timeLeft / 45), 6);
 
               if (side === 0) {
-                // ── FRONT: NBA Clock center + Buy/Sell FOMO bars ──
-                // Clock box
-                const clockW2 = 100, clockH2 = H - 24, clockX2 = W / 2 - clockW2 / 2;
+                // ── FRONT: NBA Clock center + Buy/Sell ──
+                const clockW2 = 120, clockH2 = H - 28, clockX2 = W / 2 - clockW2 / 2;
                 jx.fillStyle = "rgba(0,0,0,0.6)";
-                jx.beginPath(); jx.roundRect(clockX2, 8, clockW2, clockH2, 6); jx.fill();
+                jx.beginPath(); jx.roundRect(clockX2, 10, clockW2, clockH2, 8); jx.fill();
                 jx.strokeStyle = clockColor; jx.lineWidth = 2;
-                jx.beginPath(); jx.roundRect(clockX2, 8, clockW2, clockH2, 6); jx.stroke();
-                jx.font = "bold 56px 'JetBrains Mono', monospace";
+                jx.beginPath(); jx.roundRect(clockX2, 10, clockW2, clockH2, 8); jx.stroke();
+                jx.font = "bold 64px 'JetBrains Mono', monospace";
                 jx.fillStyle = clockColor; jx.textAlign = "center";
-                jx.shadowColor = clockColor; jx.shadowBlur = 16;
-                jx.fillText(timeStr, W / 2, midY + 18);
+                jx.shadowColor = clockColor; jx.shadowBlur = 20;
+                jx.fillText(timeStr, W / 2, midY + 22);
                 jx.shadowBlur = 0;
 
                 // Buy/sell flanking the clock
                 const buys = tx2.buys || 0, sells = tx2.sells || 0;
-                const total = buys + sells || 1;
-                // Left side: buys
-                jx.font = "bold 30px 'JetBrains Mono', monospace";
+                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = "#00ff88"; jx.textAlign = "right";
-                jx.fillText("▲" + buys, clockX2 - 14, midY + 4);
-                jx.font = "bold 16px 'JetBrains Mono', monospace";
-                jx.fillText("$" + (tx2.buyVol || "0") + "K", clockX2 - 14, midY + 24);
-                // Right side: sells
-                jx.font = "bold 30px 'JetBrains Mono', monospace";
+                jx.shadowColor = "#00ff88"; jx.shadowBlur = 8;
+                jx.fillText("▲" + buys, clockX2 - 18, midY + 6);
+                jx.shadowBlur = 0;
+                jx.font = `bold ${fSz * 0.6 | 0}px 'JetBrains Mono', monospace`;
+                jx.fillText("$" + (tx2.buyVol || "0") + "K", clockX2 - 18, midY + 42);
+                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = "#ff4444"; jx.textAlign = "left";
-                jx.fillText(sells + "▼", clockX2 + clockW2 + 14, midY + 4);
-                jx.font = "bold 16px 'JetBrains Mono', monospace";
-                jx.fillText("$" + (tx2.sellVol || "0") + "K", clockX2 + clockW2 + 14, midY + 24);
-                // Buy/sell bar at far edges
-                const barW2 = clockX2 - pad - 14;
-                const bPct = buys / total;
+                jx.shadowColor = "#ff4444"; jx.shadowBlur = 8;
+                jx.fillText(sells + "▼", clockX2 + clockW2 + 18, midY + 6);
+                jx.shadowBlur = 0;
+                jx.font = `bold ${fSz * 0.6 | 0}px 'JetBrains Mono', monospace`;
+                jx.fillText("$" + (tx2.sellVol || "0") + "K", clockX2 + clockW2 + 18, midY + 42);
+                // Buy/sell bars
+                const barW2 = clockX2 - pad - 18;
                 jx.fillStyle = "#00ff88";
-                jx.beginPath(); jx.roundRect(pad, midY + 34, barW2, 8, 4); jx.fill();
+                jx.beginPath(); jx.roundRect(pad, midY + 52, barW2, 12, 6); jx.fill();
                 jx.fillStyle = "#ff4444";
-                jx.beginPath(); jx.roundRect(W - pad - barW2, midY + 34, barW2, 8, 4); jx.fill();
+                jx.beginPath(); jx.roundRect(W - pad - barW2, midY + 52, barW2, 12, 6); jx.fill();
                 jx.textAlign = "left";
 
               } else if (side === 1) {
-                // ── BACK: MC · FDV · LIQ · VOL (full stats row) ──
+                // ── BACK: MC · FDV · LIQ · VOL ──
                 jx.textAlign = "left";
                 let rx = pad;
                 const stat = (label, val, color) => {
-                  jx.font = "bold 16px 'Inter', sans-serif";
-                  jx.fillStyle = "#555";
-                  jx.fillText(label, rx, midY - 8);
-                  jx.font = "bold 26px 'JetBrains Mono', monospace";
+                  jx.font = `bold ${fSz * 0.5 | 0}px 'Inter', sans-serif`;
+                  jx.fillStyle = "#666";
+                  jx.fillText(label, rx, midY - 14);
+                  jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
                   jx.fillStyle = color || "#fff";
-                  jx.fillText(val, rx, midY + 20);
-                  rx += Math.max(jx.measureText(val).width, 60) + 20;
+                  jx.fillText(val, rx, midY + 28);
+                  rx += Math.max(jx.measureText(val).width, 80) + 24;
                 };
                 stat("MC", si.coin.mcap, "#fff");
                 stat("FDV", si.coin.fdv || si.coin.mcap, "#ccc");
                 stat("LIQ", si.coin.liq || "—", "#00d4ff");
                 stat("VOL", si.coin.vol || "—", "#b24dff");
-                // Clock on far right
-                jx.font = "bold 40px 'JetBrains Mono', monospace";
+                // Clock far right
+                jx.font = `bold ${fSz * 1.1 | 0}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = clockColor; jx.textAlign = "right";
-                jx.shadowColor = clockColor; jx.shadowBlur = 10;
-                jx.fillText(timeStr, W - pad, midY + 16);
+                jx.shadowColor = clockColor; jx.shadowBlur = 12;
+                jx.fillText(timeStr, W - pad, midY + 22);
                 jx.shadowBlur = 0; jx.textAlign = "left";
 
               } else if (side === 2) {
-                // ── LEFT: Supply · Holders · Created + FOMO buy/sell bar ──
+                // ── LEFT: Supply · Holders · Created ──
                 const holders = tx2.holders ? tx2.holders.toLocaleString() : "—";
                 jx.textAlign = "left";
                 let rx = pad;
                 const stat = (label, val, color) => {
-                  jx.font = "bold 16px 'Inter', sans-serif";
-                  jx.fillStyle = "#555";
-                  jx.fillText(label, rx, midY - 8);
-                  jx.font = "bold 26px 'JetBrains Mono', monospace";
+                  jx.font = `bold ${fSz * 0.5 | 0}px 'Inter', sans-serif`;
+                  jx.fillStyle = "#666";
+                  jx.fillText(label, rx, midY - 14);
+                  jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
                   jx.fillStyle = color || "#fff";
-                  jx.fillText(val, rx, midY + 20);
-                  rx += Math.max(jx.measureText(val).width, 60) + 20;
+                  jx.fillText(val, rx, midY + 28);
+                  rx += Math.max(jx.measureText(val).width, 80) + 24;
                 };
                 stat("HOLDERS", holders, "#fff");
                 stat("SUPPLY", si.coin.supply || "1B", "#999");
                 stat("LAUNCH", si.coin.launchpad || "—", "#b24dff");
-                // Clock on far right
-                jx.font = "bold 40px 'JetBrains Mono', monospace";
+                // Clock far right
+                jx.font = `bold ${fSz * 1.1 | 0}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = clockColor; jx.textAlign = "right";
-                jx.shadowColor = clockColor; jx.shadowBlur = 10;
-                jx.fillText(timeStr, W - pad, midY + 16);
+                jx.shadowColor = clockColor; jx.shadowBlur = 12;
+                jx.fillText(timeStr, W - pad, midY + 22);
                 jx.shadowBlur = 0; jx.textAlign = "left";
 
               } else {
@@ -1741,37 +2038,41 @@ export default function PodiumTeleport() {
                 const totalV3 = vt.up + vt.down || 1;
                 const upPct = vt.up / totalV3;
                 const upP2 = ((upPct) * 100).toFixed(0);
-                const barW3 = W - pad * 2 - 120, barH3 = 14, barY3 = midY + 14;
+                const barW3 = W - pad * 2 - 140, barH3 = 18, barY3 = midY + 20;
 
-                jx.font = "bold 24px 'JetBrains Mono', monospace";
+                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = "#00ff88"; jx.textAlign = "left";
-                jx.fillText("▲" + vt.up, pad, midY - 2);
+                jx.shadowColor = "#00ff88"; jx.shadowBlur = 8;
+                jx.fillText("▲" + vt.up, pad, midY - 4);
+                jx.shadowBlur = 0;
                 jx.fillStyle = "#fff"; jx.textAlign = "center";
-                jx.font = "bold 20px 'Inter', sans-serif";
-                jx.fillText(upP2 + "% BULLISH", pad + barW3 / 2, midY - 2);
+                jx.font = `bold ${fSz * 0.75 | 0}px 'Inter', sans-serif`;
+                jx.fillText(upP2 + "% BULLISH", pad + barW3 / 2, midY - 4);
                 jx.fillStyle = "#ff4444"; jx.textAlign = "right";
-                jx.font = "bold 24px 'JetBrains Mono', monospace";
-                jx.fillText(vt.down + "▼", pad + barW3, midY - 2);
+                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
+                jx.shadowColor = "#ff4444"; jx.shadowBlur = 8;
+                jx.fillText(vt.down + "▼", pad + barW3, midY - 4);
+                jx.shadowBlur = 0;
 
                 // Green/red bar
                 jx.fillStyle = "#00ff88";
-                jx.beginPath(); jx.roundRect(pad, barY3, barW3 * upPct - 2, barH3, 5); jx.fill();
+                jx.beginPath(); jx.roundRect(pad, barY3, barW3 * upPct - 2, barH3, 6); jx.fill();
                 jx.fillStyle = "#ff4444";
-                jx.beginPath(); jx.roundRect(pad + barW3 * upPct + 2, barY3, barW3 * (1 - upPct) - 2, barH3, 5); jx.fill();
+                jx.beginPath(); jx.roundRect(pad + barW3 * upPct + 2, barY3, barW3 * (1 - upPct) - 2, barH3, 6); jx.fill();
 
                 // Earnings below bar
                 const earned = callerEarningsRef.current[si.name] || 0;
                 if (earned > 0) {
-                  jx.font = "bold 16px 'JetBrains Mono', monospace";
+                  jx.font = `bold ${fSz * 0.6 | 0}px 'JetBrains Mono', monospace`;
                   jx.fillStyle = "#00ff88"; jx.textAlign = "left";
-                  jx.fillText("earned $" + earned.toFixed(2), pad, barY3 + barH3 + 20);
+                  jx.fillText("earned $" + earned.toFixed(2), pad, barY3 + barH3 + 28);
                 }
 
-                // Clock on far right
-                jx.font = "bold 40px 'JetBrains Mono', monospace";
+                // Clock far right
+                jx.font = `bold ${fSz * 1.1 | 0}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = clockColor; jx.textAlign = "right";
-                jx.shadowColor = clockColor; jx.shadowBlur = 10;
-                jx.fillText(timeStr, W - pad, midY + 16);
+                jx.shadowColor = clockColor; jx.shadowBlur = 12;
+                jx.fillText(timeStr, W - pad, midY + 22);
                 jx.shadowBlur = 0; jx.textAlign = "left";
               }
             }
@@ -2222,7 +2523,7 @@ export default function PodiumTeleport() {
     tr.velY = tr.velY * 0.4 + (dy / dt) * 0.6;
     tr.lastX = x; tr.lastY = y; tr.lastTime = now;
     stateRef.current.cameraAngle = tr.sa - (x - tr.startX) * 0.006;
-    stateRef.current.cameraHeight = Math.max(1.5, Math.min(5, tr.sh + (y - tr.startY) * 0.015));
+    stateRef.current.cameraHeight = Math.max(3.5, Math.min(6, tr.sh + (y - tr.startY) * 0.015));
   }, []);
   const onDragEnd = useCallback(() => {
     const tr = touchRef.current;
@@ -2250,6 +2551,7 @@ export default function PodiumTeleport() {
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
         @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
         @keyframes slideIn{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes chartIn{from{transform:scaleX(0);opacity:0}to{transform:scaleX(1);opacity:1}}
         @keyframes ticker{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
@@ -2306,50 +2608,37 @@ export default function PodiumTeleport() {
         }}>{e.emoji}</div>
       ))}
 
-      {/* ═══ SPEECH BUBBLE — thesis above speaker, tap to expand ═══ */}
-      {speakerInfo?.thesis && speakerScreenPos && (
-        <div data-ui="1" onClick={() => setBubbleExpanded(e => !e)} style={{
+      {/* ═══ SPEECH BUBBLE — inline like chat: "name · thesis..." ═══ */}
+      {speakerInfo?.thesis && speakerScreenPos && (stateRef.current?.jmboIntroTimer || 0) <= 0 && typewriterIdx > 0 && (
+        <div data-ui="1" onMouseEnter={() => typewriterDone && setBubbleExpanded(true)} onMouseLeave={() => typewriterDone && setBubbleExpanded(false)} style={{
           position: "absolute",
-          left: Math.max(10, Math.min(speakerScreenPos.x - 140, window.innerWidth - 290)),
-          top: Math.max(50, speakerScreenPos.y - (bubbleExpanded ? 90 : 60)),
-          width: 280,
+          left: Math.max(10, Math.min(speakerScreenPos.x - 160, window.innerWidth - 330)),
+          top: Math.max(50, speakerScreenPos.y - 45),
+          maxWidth: (typewriterDone && !bubbleExpanded) ? 320 : 340,
           zIndex: 8,
           pointerEvents: "auto",
-          cursor: "pointer",
+          cursor: "default",
           animation: "slideIn 0.3s ease",
-          transition: "top 0.2s ease",
+          background: "rgba(12,6,16,0.85)",
+          backdropFilter: "blur(14px)",
+          WebkitBackdropFilter: "blur(14px)",
+          borderRadius: 10,
+          padding: "8px 14px",
+          border: "1px solid rgba(255,255,255,0.1)",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+          fontFamily: "'Inter'",
+          fontSize: 14,
+          lineHeight: 1.4,
+          letterSpacing: -0.2,
+          transition: "max-width 0.4s ease",
+          ...((typewriterDone && !bubbleExpanded) ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}),
         }}>
-          <div style={{
-            background: "rgba(12,6,16,0.88)",
-            backdropFilter: "blur(14px)",
-            WebkitBackdropFilter: "blur(14px)",
-            borderRadius: 12,
-            padding: "10px 14px",
-            border: "1px solid rgba(255,255,255,0.12)",
-            boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-          }}>
-            <div style={{
-              fontFamily: "'Inter'",
-              fontSize: 14,
-              fontWeight: 500,
-              color: "#eee",
-              lineHeight: 1.5,
-              letterSpacing: -0.2,
-              ...(bubbleExpanded ? {} : { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }),
-            }}>
-              "{bubbleExpanded ? speakerInfo.thesis : speakerInfo.thesis}"
-            </div>
-            <div style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 600, color: "#ff2d78", marginTop: 4, textAlign: "right" }}>
-              — {speakerInfo.name}
-            </div>
-          </div>
-          <div style={{
-            width: 0, height: 0,
-            borderLeft: "7px solid transparent",
-            borderRight: "7px solid transparent",
-            borderTop: "9px solid rgba(12,6,16,0.88)",
-            margin: "-1px auto 0",
-          }} />
+          <span style={{ fontWeight: 700, color: "#ff2d78" }}>{speakerInfo.name}</span>
+          <span style={{ color: "#555", margin: "0 6px" }}>·</span>
+          <span style={{ fontWeight: 500, color: "#ddd" }}>
+            {(typewriterDone && !bubbleExpanded) ? speakerInfo.thesis : speakerInfo.thesis.slice(0, typewriterIdx)}
+          </span>
+          {!typewriterDone && <span style={{ color: "#ff2d78", animation: "blink 0.6s step-end infinite", fontWeight: 700 }}>|</span>}
         </div>
       )}
 
