@@ -2,6 +2,10 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import GUI from "lil-gui";
+import {
+  getWalletBalance, executeTrade, getSolPrice, usdToSol,
+  connectWebSocket, disconnectWebSocket, getWalletAddress, solscanTx,
+} from "./frontrun.js";
 
 // ═══════════════════════════════════════════════════════
 // trench.fm — Teleport Edition + Live Chart
@@ -52,6 +56,10 @@ const Icons = {
   dollarSign: "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
   pieChart: "M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z",
   lock: "M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2zM7 11V7a5 5 0 0 1 10 0v4",
+  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
+  compass: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36z",
+  activity: "M22 12h-4l-3 9L9 3l-3 9H2",
+  home: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
 };
 
 // Generate fake but realistic chart data
@@ -231,7 +239,11 @@ export default function PodiumTeleport() {
     chars: generateChars(CHAR_COUNT), speaker: null,
     teleportPhase: "idle", // idle, beam_out, beam_in, active, beam_return
     teleportTimer: 0, teleportCharIdx: null, prevSpeaker: null,
-    cameraAngle: 0, cameraHeight: 3, cameraDist: 24, autoRotate: true, spinVelocity: 0, clock: 0,
+    cameraAngle: 0, cameraHeight: 5.5, cameraDist: 22.5, autoRotate: true, spinVelocity: 0, clock: 0,
+    // Cinematic intro sweep — wide establishing shot → swoop down to seat
+    introTimer: 0, introDuration: 4.5, introActive: true,
+    introStartHeight: 35, introStartDist: 45, introStartLookY: 3,
+    introEndHeight: 5.5, introEndDist: 22.5, introEndLookY: 3.5,
     // Jumbotron debug params (live-tunable via GUI)
     jmboY: 6.9, jmboScale: 0.5, jmboRotSpeed: 0.0,
     // Speaker params
@@ -243,7 +255,7 @@ export default function PodiumTeleport() {
     // Jumbotron intro animation (Mario Party style)
     jmboIntroTimer: 0, jmboIntroName: "", jmboIntroTicker: "", jmboIntroCharIdx: -1,
     // Dome / sky (Anadol)
-    domeHueShift: 0.62, domeSpeed: 0.2, domeIntensity: 2.0, domeBottomHalf: true,
+    domeHueShift: 0.62, domeSpeed: 0.01, domeIntensity: 0.5, domeBottomHalf: true,
     // Top calls leaderboard — prefilled for demo
     topCallsToday: [
       { ticker: "$BONK", change: "+4.2x", caller: "whale_alert", followers: "127K", timeAgo: "12m ago", fdv: "$1.8B", price: "0.00002847" },
@@ -283,6 +295,50 @@ export default function PodiumTeleport() {
   const throwablesRef = useRef([]); // { type:"tomato"|"diamond", pos:[x,y,z], vel:[x,y,z], life:0, maxLife:0.8 }
   const MAX_THROWABLES = 15;
 
+  // Intro HUD fade — hidden during camera sweep, fades in after
+  const [hudVisible, setHudVisible] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setHudVisible(true), 4500); // match introDuration
+    return () => clearTimeout(timer);
+  }, []);
+
+  // ═══ FRONTRUN API — real wallet + trades ═══
+  useEffect(() => {
+    let dead = false;
+    // Fetch wallet balance + SOL price
+    async function init() {
+      try {
+        const [wallet, price] = await Promise.all([getWalletBalance(), getSolPrice()]);
+        if (dead) return;
+        setWalletBalance(wallet.sol);
+        setSolPrice(price);
+        console.log(`[frontrun] wallet ${wallet.address}: ${wallet.sol} SOL ($${(wallet.sol * price).toFixed(2)})`);
+      } catch (e) {
+        console.warn("[frontrun] init failed, using mock balance:", e.message);
+        if (!dead) { setWalletBalance(0); setSolPrice(180); }
+      }
+    }
+    init();
+    // Refresh SOL price every 30s
+    const priceIv = setInterval(async () => {
+      try { const p = await getSolPrice(); if (!dead) setSolPrice(p); } catch {}
+    }, 30000);
+    // WebSocket — real-time balance updates after trades
+    connectWebSocket((data) => {
+      if (dead) return;
+      const newSol = parseInt(data.balance, 10) / 1e9;
+      setWalletBalance(newSol);
+      // Match pending trade signature
+      if (pendingSigRef.current && data.signature === pendingSigRef.current) {
+        setTradeStatus("confirmed");
+        pendingSigRef.current = null;
+        // Auto-clear status after 3s
+        setTimeout(() => setTradeStatus(null), 3000);
+      }
+    });
+    return () => { dead = true; clearInterval(priceIv); disconnectWebSocket(); };
+  }, []);
+
   // Thesis modal
   const [showStepUpModal, setShowStepUpModal] = useState(false);
   const [stepUpCA, setStepUpCA] = useState("");
@@ -290,7 +346,11 @@ export default function PodiumTeleport() {
   // Buy sheet
   const [showBuySheet, setShowBuySheet] = useState(false);
   const [buyAmount, setBuyAmount] = useState("");
-  const [walletBalance] = useState(2.4);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [solPrice, setSolPrice] = useState(180); // USD per SOL, fetched on mount
+  const [tradeStatus, setTradeStatus] = useState(null); // null | "pending" | "confirmed" | "error"
+  const [lastTxSig, setLastTxSig] = useState(null);
+  const pendingSigRef = useRef(null);
   // Queue — pre-seeded with 3 callers for demo rotation
   const [queue, setQueue] = useState([
     { name: "whale_alert", coin: COINS[1], thesis: "WIF is the cultural play. Disney of crypto. Every normie recognizes a dog in a hat. Easy 5x before EOY." },
@@ -327,6 +387,12 @@ export default function PodiumTeleport() {
   const [typewriterIdx, setTypewriterIdx] = useState(0); // chars revealed so far
   const [typewriterDone, setTypewriterDone] = useState(false); // fully typed + collapsed
   const typewriterRef = useRef(null); // interval handle
+  // Console state
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleTab, setConsoleTab] = useState("discover");
+  const [consoleSearchQuery, setConsoleSearchQuery] = useState("");
+  // Quick buy bubble
+  const [quickBuyUSD, setQuickBuyUSD] = useState(null); // selected USD amount, null = none
   const [caCopied, setCaCopied] = useState(false);
   const copyCA = useCallback((e) => {
     e.stopPropagation();
@@ -484,7 +550,7 @@ export default function PodiumTeleport() {
       // Kick off the first caller automatically
       const st = stateRef.current;
       const firstCoin = COINS[0];
-      const idx = Math.floor(Math.random() * st.chars.length);
+      const idx = st.chars.findIndex(c => c.name === "zac") ?? 0;
       const c = st.chars[idx];
       st.teleportCharIdx = idx;
       st.teleportPhase = "beam_out";
@@ -587,7 +653,7 @@ export default function PodiumTeleport() {
       container.appendChild(renderer.domElement); rendererRef.current = renderer;
 
       const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(50, w / h, 0.5, 80);
+      const camera = new THREE.PerspectiveCamera(50, w / h, 0.5, 150);
 
       // Lighting
       scene.add(new THREE.AmbientLight(0x553366, 1.5));
@@ -613,7 +679,7 @@ export default function PodiumTeleport() {
             float t = uTime * uSpeed;
             float autoHue = uHueShift + t * 0.0083;
             float th=atan(vP.x,vP.z);
-            float ph=acos(clamp(vP.y/50.0,-1.0,1.0));
+            float ph=acos(clamp(vP.y/70.0,-1.0,1.0));
             vec2 p=vec2(th*2.0,ph*3.0);
 
             // Triple-layer domain warping — deep organic complexity
@@ -662,7 +728,7 @@ export default function PodiumTeleport() {
 
             // ═══ SHADOWS — rich deep purple (never flat black) ═══
             float valley=pow(1.0-comp,2.0);
-            col+=vec3(0.08,0.02,0.14)*valley*0.40;
+            col+=vec3(0.15,0.04,0.25)*valley*0.50;
 
             // ═══ IRIDESCENT SHIMMER ═══
             vec3 iri=cosPal(comp*2.0+t*0.01,
@@ -676,12 +742,12 @@ export default function PodiumTeleport() {
 
             // ═══ BREATHING — gentle, not dimming ═══
             float br=(0.92+sin(t*0.55)*0.08)*uIntensity;
-            // BRIGHT: dark areas at 0.45 (not black), peaks at full
-            float ii=br*(0.45+comp*0.55);
+            // BRIGHT: dark areas at 0.55 (never black), peaks at full — Vegas Sphere energy
+            float ii=br*(0.70+comp*0.30);
 
             // ═══ WARM BASE — pink-tinted, never cold black ═══
-            vec3 base=vec3(0.04,0.012,0.06)+cosPal(autoHue,
-              vec3(0.02,0.008,0.03),vec3(0.015,0.008,0.02),
+            vec3 base=vec3(0.12,0.04,0.14)+cosPal(autoHue,
+              vec3(0.06,0.02,0.08),vec3(0.04,0.02,0.05),
               vec3(1.0,1.0,1.0),vec3(0.0,0.33,0.67));
             vec3 f=base+col*ii;
 
@@ -689,20 +755,28 @@ export default function PodiumTeleport() {
             f+=vec3(1.0,0.15,0.55)*hs*0.25;
             f+=vec3(0.15,0.7,0.06)*limeBloom*0.06;
 
-            // Bottom hemisphere fade
-            float hNorm=vP.y/50.0;
+            // Equatorial brightness boost — pattern must come 100% down to crowd, zero black
+            float polarT=ph/3.14159;  // 0 at top, 1 at bottom
+            float eqBoost=smoothstep(0.15,0.55,polarT);
+            f*=(1.0+eqBoost*1.2);  // up to +120% brightness in equatorial/lower regions
+
+            // Bottom hemisphere fade — only when bottom half is disabled
+            float hNorm=vP.y/70.0;
             if(uBottomHalf<0.5){
-              float fade=smoothstep(-0.3,0.15,hNorm);
+              float fade=smoothstep(-0.3,-0.05,hNorm);
               f*=fade;
             }
 
+            // Absolute brightness floor — rich purple, never dark, extends fully to equator
+            f=max(f,vec3(0.30,0.11,0.35));
             gl_FragColor=vec4(f,1.0);
           }`,
       });
-      scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, isMobile ? 24 : 32, isMobile ? 24 : 32), domeMat));
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(70, isMobile ? 24 : 32, isMobile ? 24 : 32), domeMat));
 
       // ═══ ANADOL FLOOR — synced with dome hue ═══
       const floorMat = new THREE.ShaderMaterial({
+        transparent: true,
         uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
         vertexShader: `varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
         fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vP;${ANADOL_GLSL}
@@ -717,7 +791,7 @@ export default function PodiumTeleport() {
           float limeMask=pow(s,3.0);
           vec3 lime=cosPal(w1*0.5+0.5+ah,vec3(0.03,0.20,0.03),vec3(0.10,0.55,0.08),vec3(0.5,1.0,0.4),vec3(0.0,0.33+ah*0.2,0.67));
           c+=lime*limeMask*0.18;
-          float d=length(vP.xz);float pg=smoothstep(10.0,1.0,d)*0.7;float ef=smoothstep(35.0,8.0,d);
+          float d=length(vP.xz);float pg=smoothstep(10.0,1.0,d)*0.7;float ef=smoothstep(28.0,10.0,d);
           float r=(s*0.55+0.20)+pg;r*=ef;
           // Neon grid lines — hot pink
           float gx=smoothstep(0.03,0.0,abs(fract(vP.x*0.5)-0.5));
@@ -726,9 +800,10 @@ export default function PodiumTeleport() {
           vec3 gridCol=vec3(1.0,0.1,0.5)*g;
           // Breathing sync
           float flBr=0.92+sin(uTime*uSpd*0.55)*0.08;
-          vec3 b=vec3(0.02,0.008,0.035);gl_FragColor=vec4(b+c*r*flBr+gridCol,1.0);}`,
+          float floorAlpha=smoothstep(28.0,20.0,d);
+          vec3 b=vec3(0.02,0.008,0.035);gl_FragColor=vec4(b+c*r*flBr+gridCol,floorAlpha);}`,
       });
-      const fg = new THREE.CircleGeometry(ROOM_RADIUS + 5, 48); fg.rotateX(-Math.PI / 2);
+      const fg = new THREE.CircleGeometry(ROOM_RADIUS + 4, 48); fg.rotateX(-Math.PI / 2);
       scene.add(new THREE.Mesh(fg, floorMat));
 
       // Walls removed — dome sphere covers everything beautifully
@@ -741,17 +816,25 @@ export default function PodiumTeleport() {
         vertexShader: `varying vec3 vW;varying vec3 vN;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;vN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
         fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;varying vec3 vN;${ANADOL_GLSL}
           void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
+          // Top surface uses SAME planar XZ mapping as floor so pattern flows seamlessly
+          float topMix=smoothstep(0.85,1.1,vN.y); // 1.0 on top face, 0.0 on sides
+          // Planar coords (same as floor)
+          vec2 pFloor=vW.xz*0.06;
+          // Cylindrical coords (for sides)
           float a=atan(vW.x,vW.z);float h=vW.y;
-          vec2 p=vec2(a*4.0,h*3.0);
-          float w1=domainWarp(p*1.0,t*1.0,${isMobile ? 2 : 4});float w2=domainWarp(p*1.5+vec2(2.0,5.0),t*0.7,${isMobile ? 2 : 3});
+          vec2 pSide=vec2(a*4.0,h*3.0);
+          // Blend between planar (top) and cylindrical (sides)
+          vec2 p=mix(pSide,pFloor*16.0,topMix);
+          float w1=domainWarp(p*0.5,t*0.6,${isMobile ? 2 : 4});float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,${isMobile ? 2 : 3});
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          // Neon Anadol podium — hottest version of the palette (stage is the focal point)
-          vec3 c=cosPal(s+ah,vec3(0.12,0.01,0.10),vec3(0.85,0.12,0.55),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
-          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.01,0.08,0.16),vec3(0.10,0.65,0.70),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
+          // Use SAME palette as floor so colors match
+          vec3 c=cosPal(s+ah,vec3(0.35,0.06,0.28),vec3(0.50,0.10,0.40),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
+          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.04,0.20,0.32),vec3(0.12,0.50,0.55),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
           c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
-          // Neon lime tendrils on podium surface
-          float limePod=pow(max(0.0,domainWarp(p*2.0+vec2(4.0,6.0),t*0.8,${isMobile ? 2 : 3})*0.5+0.5),3.0);
-          c+=vec3(0.12,0.85,0.06)*limePod*0.18;
+          // Lime accent matching floor
+          float limeMask=pow(s,3.0);
+          vec3 lime=cosPal(w1*0.5+0.5+ah,vec3(0.03,0.20,0.03),vec3(0.10,0.55,0.08),vec3(0.5,1.0,0.4),vec3(0.0,0.33+ah*0.2,0.67));
+          c+=lime*limeMask*0.18;
           // Bright top surface — neon glow platform
           float topGlow=smoothstep(1.0,1.22,h)*1.5;
           float side=(s*0.7+0.2);
@@ -942,7 +1025,7 @@ export default function PodiumTeleport() {
       });
 
       // Metallic frame structure — square cross-section
-      const frameMat = new THREE.MeshStandardMaterial({ color: 0x0a0a12, metalness: 0.9, roughness: 0.2 });
+      const frameMat = new THREE.MeshStandardMaterial({ color: 0x1a1228, metalness: 0.9, roughness: 0.2 });
       const totalH = mainH + botH + topH + 0.6;
       const plateSize = faceW + 1;
       // Top/bottom plates
@@ -1457,24 +1540,41 @@ export default function PodiumTeleport() {
         fpsBuf.current.push(now);
         while (fpsBuf.current.length > 0 && now - fpsBuf.current[0] > 1000) fpsBuf.current.shift();
 
-        // Spin physics — zen mode: smooth momentum, capped speed, gentle friction
-        const MAX_SPIN = 0.04; // max radians/frame — prevents wild spinning
-        if (!touchRef.current.active) {
-          if (Math.abs(st.spinVelocity) > 0.0001) {
-            // Clamp spin speed for zen feel
-            st.spinVelocity = Math.max(-MAX_SPIN, Math.min(MAX_SPIN, st.spinVelocity));
-            st.cameraAngle += st.spinVelocity;
-            // Smooth exponential decay — like a well-oiled turntable
-            st.spinVelocity *= 0.975;
-          } else if (st.autoRotate) {
-            st.cameraAngle += dt * 0.06;
-          } else if (Math.abs(st.spinVelocity) <= 0.0001) {
-            st.autoRotate = true;
+        // ═══ CINEMATIC INTRO SWEEP — bird's eye → gameplay position ═══
+        if (st.introActive) {
+          st.introTimer += dt;
+          const p = Math.min(st.introTimer / st.introDuration, 1);
+          // Cubic ease-out for smooth "landing" feel
+          const e = 1 - Math.pow(1 - p, 3);
+          const iH = st.introStartHeight + (st.introEndHeight - st.introStartHeight) * e;
+          const iD = st.introStartDist + (st.introEndDist - st.introStartDist) * e;
+          const iLY = st.introStartLookY + (st.introEndLookY - st.introStartLookY) * e;
+          // Slow orbit during intro for cinematic feel
+          st.cameraAngle += dt * 0.15;
+          camera.position.x = Math.sin(st.cameraAngle) * iD;
+          camera.position.z = Math.cos(st.cameraAngle) * iD;
+          camera.position.y = iH;
+          camera.lookAt(0, iLY, 0);
+          if (p >= 1) st.introActive = false;
+        } else {
+          // Spin physics — zen mode: smooth momentum, capped speed, gentle friction
+          const MAX_SPIN = 0.04; // max radians/frame — prevents wild spinning
+          if (!touchRef.current.active) {
+            if (Math.abs(st.spinVelocity) > 0.0001) {
+              st.spinVelocity = Math.max(-MAX_SPIN, Math.min(MAX_SPIN, st.spinVelocity));
+              st.cameraAngle += st.spinVelocity;
+              st.spinVelocity *= 0.975;
+            } else if (st.autoRotate) {
+              st.cameraAngle += dt * 0.06;
+            } else if (Math.abs(st.spinVelocity) <= 0.0001) {
+              st.autoRotate = true;
+            }
           }
+          camera.position.x = Math.sin(st.cameraAngle) * st.cameraDist;
+          camera.position.z = Math.cos(st.cameraAngle) * st.cameraDist;
+          camera.position.y = st.cameraHeight;
+          camera.lookAt(0, 3.5, 0);
         }
-        camera.position.x = Math.sin(st.cameraAngle) * st.cameraDist;
-        camera.position.z = Math.cos(st.cameraAngle) * st.cameraDist;
-        camera.position.y = st.cameraHeight; camera.lookAt(0, 3, 0);
         camera.updateMatrixWorld();
 
         domeMat.uniforms.uTime.value = t;
@@ -1512,11 +1612,11 @@ export default function PodiumTeleport() {
         if (threeRef.current.jmboGroup) {
           const T = threeRef.current;
           const jScale = st.jmboScale;
-          // Auto-position: pin jumbotron top plate to viewport top
+          // Auto-position: pin jumbotron top plate to viewport top (all frames, including intro)
           _pv1.set(0, 10, 0).project(camera);
           _pv2.set(0, 20, 0).project(camera);
           const ndcPerY = (_pv2.y - _pv1.y) / 10;
-          const topNDC = isIPhone ? 0.78 : 0.95;
+          const topNDC = isIPhone ? 0.83 : 1.0;
           const topVisY = 10 + (topNDC - _pv1.y) / ndcPerY;
           const jY = topVisY - JMBO_TOP_LOCAL * jScale;
           T.jmboGroup.position.y = jY;
@@ -1980,11 +2080,69 @@ export default function PodiumTeleport() {
               jx.textAlign = "left";
             }
 
+            // ── TRENCH.FM ARENA INTRO — shows during camera sweep ──
+            function renderArenaIntro(jx, W, H) {
+              jx.clearRect(0, 0, W, H);
+              const ip = Math.min(st.introTimer / st.introDuration, 1);
+              // Dark background with pulsing radial glow
+              jx.fillStyle = "#02000a"; jx.fillRect(0, 0, W, H);
+              const cx = W / 2, cy = H * 0.42;
+              // Radial neon burst
+              const burstR = 80 + ip * W * 0.4;
+              const rg = jx.createRadialGradient(cx, cy, 0, cx, cy, burstR);
+              rg.addColorStop(0, `rgba(255,45,120,${0.2 + Math.sin(t * 3) * 0.08})`);
+              rg.addColorStop(0.5, `rgba(0,212,255,${0.08 + Math.sin(t * 2.5) * 0.04})`);
+              rg.addColorStop(1, "rgba(0,0,0,0)");
+              jx.fillStyle = rg; jx.fillRect(0, 0, W, H);
+              // Speed lines
+              if (ip > 0.1) {
+                for (let r = 0; r < 16; r++) {
+                  const ang = (r / 16) * Math.PI * 2 + t * 0.8;
+                  const inner = 50; const outer = inner + ip * W * 0.5;
+                  jx.save(); jx.translate(cx, cy); jx.rotate(ang);
+                  const lg = jx.createLinearGradient(0, inner, 0, outer);
+                  const c = r % 2 === 0 ? "255,45,120" : "0,212,255";
+                  lg.addColorStop(0, `rgba(${c},${0.12 * ip})`);
+                  lg.addColorStop(1, "rgba(0,0,0,0)");
+                  jx.fillStyle = lg;
+                  jx.fillRect(-2, inner, 4, outer - inner);
+                  jx.restore();
+                }
+              }
+              // "trench.fm" logo — scale up with bounce
+              const logoScale = ip < 0.3 ? Math.pow(ip / 0.3, 0.5) * 1.15 : 1 + Math.sin((ip - 0.3) * 8) * 0.03 * (1 - ip);
+              const fontSize = Math.floor(72 * logoScale);
+              jx.save(); jx.globalAlpha = Math.min(ip * 4, 1);
+              jx.font = `900 ${fontSize}px "Press Start 2P", monospace`;
+              jx.textAlign = "center"; jx.textBaseline = "middle";
+              // Neon glow layers
+              jx.shadowColor = "#ff2d78"; jx.shadowBlur = 40;
+              jx.fillStyle = "#ff2d78"; jx.fillText("trench.fm", cx, cy);
+              jx.shadowColor = "#00d4ff"; jx.shadowBlur = 25;
+              jx.fillStyle = "#fff"; jx.fillText("trench.fm", cx, cy);
+              jx.shadowBlur = 0;
+              // Subtitle
+              const subAlpha = Math.max(0, (ip - 0.35) * 3);
+              if (subAlpha > 0) {
+                jx.globalAlpha = Math.min(subAlpha, 1);
+                jx.font = `600 ${Math.floor(22 * logoScale)}px "Press Start 2P", monospace`;
+                jx.fillStyle = "#00d4ff";
+                jx.fillText("WELCOME TO THE ARENA", cx, cy + fontSize * 0.8);
+              }
+              // Scanlines
+              jx.globalAlpha = 0.04;
+              for (let y = 0; y < H; y += 4) { jx.fillStyle = "#000"; jx.fillRect(0, y, W, 2); }
+              jx.restore();
+            }
+
             // FRONT/BACK = chart, LEFT/RIGHT = leaderboard
-            const showIntro = st.jmboIntroTimer > 0;
+            const showSpeakerIntro = st.jmboIntroTimer > 0;
+            const showArenaIntro = st.introActive;
             [0, 1].forEach(i => {
               const f = T.jmboFaces[i];
-              if (showIntro) {
+              if (showArenaIntro) {
+                renderArenaIntro(f.ctx, f.canvas.width, f.canvas.height);
+              } else if (showSpeakerIntro) {
                 renderIntroFace(f.ctx, f.canvas.width, f.canvas.height);
               } else {
                 renderMainFace(f.ctx, f.canvas.width, f.canvas.height);
@@ -1993,7 +2151,9 @@ export default function PodiumTeleport() {
             });
             [2, 3].forEach(i => {
               const f = T.jmboFaces[i];
-              if (showIntro) {
+              if (showArenaIntro) {
+                renderArenaIntro(f.ctx, f.canvas.width, f.canvas.height);
+              } else if (showSpeakerIntro) {
                 renderIntroFace(f.ctx, f.canvas.width, f.canvas.height);
               } else {
                 renderSideFace(f.ctx, f.canvas.width, f.canvas.height);
@@ -2747,7 +2907,7 @@ export default function PodiumTeleport() {
     if (isNaN(amt) || amt <= 0 || amt > walletBalance) return;
     const coin = speakerInfo.coin;
     const entryPrice = parseFloat(coin.price);
-    const tradeUSD = amt * 180; // SOL → USD
+    const tradeUSD = amt * solPrice; // SOL → USD
     // Fee flywheel — 1% split: 0.5% platform, 0.3% caller, 0.2% treasury
     const callerFee = tradeUSD * FEE_CALLER;
     const platformFee = tradeUSD * FEE_PLATFORM;
@@ -2780,13 +2940,122 @@ export default function PodiumTeleport() {
     setTimeout(() => setFloatingEmojis(prev => prev.filter(e => !burst.includes(e))), 4000);
   }, [speakerInfo, buyAmount, walletBalance]);
 
-  const handleSell = useCallback((coinTicker) => {
+  const handleQuickBuy = useCallback(async (usd) => {
+    if (!speakerInfo) return;
+    const coin = speakerInfo.coin;
+    const solAmt = usdToSol(usd, solPrice);
+    if (solAmt > walletBalance) {
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `Insufficient balance — need ${solAmt.toFixed(4)} SOL ($${usd})` }]);
+      return;
+    }
+
+    // Optimistic UI — close tooltip, show pending
+    setShowBuySheet(false);
+    setQuickBuyUSD(null);
+    setTradeStatus("pending");
+    setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Swapping $${usd} → ${coin.ticker}...` }]);
+
+    try {
+      const result = await executeTrade({
+        tokenMint: coin.ca,
+        side: "BUY",
+        uiInputAmount: solAmt.toFixed(9),
+        slippageBasisPoint: 500,
+        confirmationMode: "ASYNC",
+      });
+
+      // Track signature for WebSocket confirmation
+      setLastTxSig(result.signature);
+      pendingSigRef.current = result.signature;
+
+      // Optimistic balance deduction (WebSocket will correct)
+      setWalletBalance(prev => Math.max(0, prev - solAmt));
+
+      // Update local state
+      const entryPrice = parseFloat(coin.price);
+      const callerName = speakerInfo.name;
+      const callerFee = usd * FEE_CALLER;
+      setCallerEarnings(prev => ({ ...prev, [callerName]: (prev[callerName] || 0) + callerFee }));
+      setPlatformRevenue(prev => prev + usd * FEE_PLATFORM);
+      setCallVolume(prev => prev + usd);
+      setUserPositions(p => [...p, { coin: coin.ticker, amount: solAmt, entry: entryPrice, current: entryPrice, caller: callerName, txSig: result.signature }]);
+      const displayName = privacyMode ? "anon" : "you";
+      setActivityFeed(p => [...p, { user: displayName, action: "bought", amount: `$${usd}`, coin: coin.ticker }]);
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Sent! ${coin.ticker} buy tx: ${result.signature.slice(0, 8)}...` }]);
+
+      buyFlashRef.current = performance.now() / 1000;
+      const emojis = ["💰", "🤑", "💵", "🚀", "⚡", "💎", "🔥"];
+      const burst = Array.from({ length: 8 }, (_, i) => ({
+        id: Date.now() + i, emoji: emojis[Math.floor(Math.random() * emojis.length)],
+        x: 30 + Math.random() * (window.innerWidth - 100),
+        delay: Math.random() * 0.4, speed: 2 + Math.random() * 2.5, size: 16 + Math.random() * 12,
+      }));
+      setFloatingEmojis(prev => [...prev, ...burst]);
+      setTimeout(() => setFloatingEmojis(prev => prev.filter(e => !burst.includes(e))), 4000);
+
+      // If WebSocket doesn't confirm in 15s, refresh balance manually
+      setTimeout(async () => {
+        if (pendingSigRef.current === result.signature) {
+          pendingSigRef.current = null;
+          setTradeStatus("confirmed");
+          setTimeout(() => setTradeStatus(null), 3000);
+          try { const w = await getWalletBalance(); setWalletBalance(w.sol); } catch {}
+        }
+      }, 15000);
+
+    } catch (e) {
+      console.error("[frontrun] buy failed:", e);
+      setTradeStatus("error");
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `Trade failed: ${e.message}` }]);
+      // Restore balance on failure
+      setWalletBalance(prev => prev + solAmt);
+      setTimeout(() => setTradeStatus(null), 4000);
+    }
+  }, [speakerInfo, walletBalance, solPrice, privacyMode]);
+
+  const handleSell = useCallback(async (coinTicker) => {
     const pos = userPositions.find(p => p.coin === coinTicker);
     if (!pos) return;
-    const pnl = ((pos.current - pos.entry) / pos.entry * 100);
-    setUserPositions(p => p.filter(pp => pp.coin !== coinTicker));
-    setActivityFeed(p => [...p, { user: "you", action: pnl >= 0 ? "up" : "sold", amount: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(0)}%`, coin: coinTicker }]);
-    setChatMessages(p => [...p, { user: "trench.fm", msg: `💰 you sold ${pos.amount.toFixed(2)} SOL of ${coinTicker} (${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}%)` }]);
+    // Find the token mint from COINS
+    const coinData = COINS.find(c => c.ticker === coinTicker);
+    if (!coinData) return;
+
+    setTradeStatus("pending");
+    setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Selling 100% of ${coinTicker}...` }]);
+
+    try {
+      const result = await executeTrade({
+        tokenMint: coinData.ca,
+        side: "SELL",
+        sellPercent: 100,
+        slippageBasisPoint: 500,
+        confirmationMode: "ASYNC",
+      });
+
+      pendingSigRef.current = result.signature;
+      setLastTxSig(result.signature);
+
+      const pnl = ((pos.current - pos.entry) / pos.entry * 100);
+      setUserPositions(p => p.filter(pp => pp.coin !== coinTicker));
+      setActivityFeed(p => [...p, { user: "you", action: pnl >= 0 ? "up" : "sold", amount: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(0)}%`, coin: coinTicker }]);
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `💰 Sold ${coinTicker} tx: ${result.signature.slice(0, 8)}...` }]);
+
+      // Refresh balance after a delay (WebSocket or fallback)
+      setTimeout(async () => {
+        if (pendingSigRef.current === result.signature) {
+          pendingSigRef.current = null;
+          setTradeStatus("confirmed");
+          setTimeout(() => setTradeStatus(null), 3000);
+        }
+        try { const w = await getWalletBalance(); setWalletBalance(w.sol); } catch {}
+      }, 10000);
+
+    } catch (e) {
+      console.error("[frontrun] sell failed:", e);
+      setTradeStatus("error");
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `Sell failed: ${e.message}` }]);
+      setTimeout(() => setTradeStatus(null), 4000);
+    }
   }, [userPositions]);
 
   // Simulate position P&L updates
@@ -2808,6 +3077,12 @@ export default function PodiumTeleport() {
     tr.velX = 0; tr.velY = 0;
     stateRef.current.autoRotate = false;
     stateRef.current.spinVelocity = 0;
+    // Skip intro on any touch — user wants in NOW
+    if (stateRef.current.introActive) {
+      stateRef.current.introActive = false;
+      stateRef.current.cameraHeight = stateRef.current.introEndHeight;
+      stateRef.current.cameraDist = stateRef.current.introEndDist;
+    }
   }, []);
   const onDragMove = useCallback((x, y, e) => {
     const tr = touchRef.current;
@@ -2872,28 +3147,34 @@ export default function PodiumTeleport() {
         @keyframes buyGlow{0%,100%{box-shadow:0 0 8px rgba(0,255,136,0.3)}50%{box-shadow:0 0 20px rgba(0,255,136,0.5)}}
         @keyframes micGlow{0%,100%{box-shadow:0 0 8px rgba(255,45,120,0.3)}50%{box-shadow:0 0 20px rgba(255,45,120,0.5)}}
         @keyframes chatSlideIn{from{transform:translateX(-16px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes consoleUp{from{transform:translateY(100%);opacity:0.8}to{transform:translateY(0);opacity:1}}
+        @keyframes tabSlide{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes consoleGlow{0%,100%{box-shadow:0 0 8px rgba(0,212,255,0.3)}50%{box-shadow:0 0 20px rgba(0,212,255,0.5)}}
         .chat-input:focus{border-color:rgba(255,45,120,0.5)!important;box-shadow:0 0 12px rgba(255,45,120,0.2)!important;background:rgba(255,45,120,0.04)!important}
       `}</style>
 
       <div ref={mountRef} style={{ width: "100%", height: "100%", touchAction: "none", cursor: "grab" }} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU} />
 
-      {/* TOP BAR — glass HUD */}
-      <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "linear-gradient(180deg,rgba(6,2,10,0.7) 50%,transparent 100%)", backdropFilter: "blur(12px) saturate(1.3)", WebkitBackdropFilter: "blur(12px) saturate(1.3)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1, filter: `hue-rotate(${((stateRef.current?.domeHueShift || 0) + (stateRef.current?.clock || 0) * 0.0083) * 360 % 360}deg)`, textShadow: "0 0 20px rgba(255,45,120,0.4)" }}>trench.fm</div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      {/* TOP BAR — transparent, text glows over Anadol */}
+      <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "none", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: hudVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
+        <div style={{ position: "relative" }}>
+          <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, color: "transparent", background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1, filter: `hue-rotate(${((stateRef.current?.domeHueShift || 0) + (stateRef.current?.clock || 0) * 0.0083) * 360 % 360}deg)`, position: "relative", zIndex: 1 }}>trench.fm</div>
+          <div style={{ position: "absolute", top: 0, left: 0, fontFamily: "'Press Start 2P'", fontSize: 13, color: "#000", letterSpacing: 1, zIndex: 0, textShadow: "0 0 12px rgba(0,0,0,0.9), 0 0 24px rgba(0,0,0,0.7), 0 0 40px rgba(0,0,0,0.5)" }}>trench.fm</div>
+        </div>
+        <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
           {queue.length > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(255,45,120,0.08)", border: "1px solid rgba(255,45,120,0.2)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(10,0,8,0.45)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "1px solid rgba(255,45,120,0.25)", boxShadow: "0 0 8px rgba(255,45,120,0.15)" }}>
               <Icon d={Icons.mic} size={11} color="#ff2d78" />
-              <span style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 600, color: "#ff2d78" }}>{queue.length}</span>
+              <span style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 600, color: "#ff2d78", textShadow: "0 0 6px rgba(255,45,120,0.4)" }}>{queue.length}</span>
             </div>
           )}
-          <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.15)" }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00ff88", animation: "liveDot 2s infinite" }} />
-            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 500, color: "#00ff88", letterSpacing: -0.3 }}>{liveCount}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, background: "rgba(10,0,8,0.45)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "1px solid rgba(0,255,136,0.2)", boxShadow: "0 0 8px rgba(0,255,136,0.1)" }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00ff88", animation: "liveDot 2s infinite", boxShadow: "0 0 6px rgba(0,255,136,0.6)" }} />
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 600, color: "#00ff88", letterSpacing: -0.3, textShadow: "0 0 6px rgba(0,255,136,0.4)" }}>{liveCount}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <Icon d={Icons.wallet} size={11} color="#888" />
-            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 500, color: "#aaa", letterSpacing: -0.3 }}>{walletBalance}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(10,0,8,0.45)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <Icon d={Icons.wallet} size={11} color="#aaa" />
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 600, color: "#ccc", letterSpacing: -0.3, textShadow: "0 0 4px rgba(255,255,255,0.2)" }}>{walletBalance.toFixed(walletBalance < 1 ? 4 : 2)}</span>
           </div>
         </div>
       </div>
@@ -2949,7 +3230,7 @@ export default function PodiumTeleport() {
       )}
 
       {/* ═══ FLOATING CHAT — glass pill HUD feed (tap to expand history) ═══ */}
-      <div data-ui="1" onClick={() => setChatExpanded(p => !p)} style={{ position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 9, padding: "0 10px", display: "flex", flexDirection: "column", gap: 2, maxHeight: chatExpanded ? "60vh" : 160, overflow: chatExpanded ? "auto" : "hidden", maskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", WebkitMaskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", scrollbarWidth: "none", msOverflowStyle: "none", transition: "max-height 0.3s ease", WebkitOverflowScrolling: "touch" }}>
+      <div data-ui="1" onClick={() => setChatExpanded(p => !p)} style={{ position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 8, padding: "0 10px", display: consoleOpen ? "none" : "flex", flexDirection: "column", gap: 2, maxHeight: chatExpanded ? "60vh" : 160, overflow: chatExpanded ? "auto" : "hidden", maskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", WebkitMaskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", scrollbarWidth: "none", msOverflowStyle: "none", transition: "max-height 0.3s ease, opacity 0.8s ease", WebkitOverflowScrolling: "touch", opacity: hudVisible ? 1 : 0, pointerEvents: hudVisible ? "auto" : "none" }}>
         {(chatExpanded ? chatMessages : chatMessages.slice(-10)).map((m, i, arr) => {
           const userColor = m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`;
           return (
@@ -2975,44 +3256,337 @@ export default function PodiumTeleport() {
         <div ref={chatEndRef} />
       </div>
 
-      {/* ═══ BOTTOM BAR — 2026 glassmorphism + neon glow ═══ */}
-      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "rgba(6,2,10,0.65)", backdropFilter: "blur(20px) saturate(1.4)", WebkitBackdropFilter: "blur(20px) saturate(1.4)", borderTop: "1px solid rgba(255,45,120,0.12)", paddingBottom: "max(6px, env(safe-area-inset-bottom))", boxShadow: "0 -4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)" }}>
-        <div style={{ display: "flex", gap: 4, padding: "7px 8px", alignItems: "center" }}>
-          {/* Chat input — neon glow on focus */}
-          <input ref={chatInputRef} className="chat-input" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say something..." style={{ flex: 1, minWidth: 0, padding: "9px 12px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2, transition: "all 0.25s ease" }} />
-          {/* Vote UP — with count badge */}
+      {/* ═══ TRADE STATUS TOAST ═══ */}
+      {tradeStatus && (
+        <div data-ui="1" style={{
+          position: "absolute", bottom: 60, left: "50%", transform: "translateX(-50%)", zIndex: 55,
+          padding: "6px 14px", borderRadius: 20, animation: "slideIn 0.2s ease",
+          background: tradeStatus === "pending" ? "rgba(0,212,255,0.15)" : tradeStatus === "confirmed" ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)",
+          border: `1px solid ${tradeStatus === "pending" ? "rgba(0,212,255,0.3)" : tradeStatus === "confirmed" ? "rgba(0,255,136,0.3)" : "rgba(255,68,68,0.3)"}`,
+          backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+          display: "flex", alignItems: "center", gap: 6,
+        }}>
+          {tradeStatus === "pending" && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00d4ff", animation: "pulse 1s infinite" }} />}
+          {tradeStatus === "confirmed" && <Icon d={Icons.check} size={12} color="#00ff88" />}
+          {tradeStatus === "error" && <Icon d={Icons.x} size={12} color="#ff4444" />}
+          <span style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 600, letterSpacing: -0.2, color: tradeStatus === "pending" ? "#00d4ff" : tradeStatus === "confirmed" ? "#00ff88" : "#ff4444" }}>
+            {tradeStatus === "pending" ? "Tx pending..." : tradeStatus === "confirmed" ? "Confirmed!" : "Failed"}
+          </span>
+          {lastTxSig && tradeStatus === "confirmed" && (
+            <span onClick={() => window.open(solscanTx(lastTxSig), "_blank")} style={{ fontFamily: "'JetBrains Mono'", fontSize: 9, color: "#00d4ff", cursor: "pointer", textDecoration: "underline", letterSpacing: -0.3 }}>view</span>
+          )}
+        </div>
+      )}
+
+      {/* ═══ FLOATING VOTE BUTTONS — above bottom bar/console when speaker active ═══ */}
+      {speakerInfo && (
+        <div data-ui="1" style={{ position: "absolute", bottom: consoleOpen ? "calc(45vh + 58px)" : 62, right: 10, zIndex: 12, display: "flex", gap: 6, opacity: hudVisible ? 1 : 0, transition: "all 0.3s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
           <div style={{ position: "relative" }}>
-            <button onClick={() => handleVote("up")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.06)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "up" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "up" ? "0 0 16px rgba(0,255,136,0.4)" : "none" }}>
+            <button onClick={() => handleVote("up")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(10,4,14,0.7)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: userVoted && userVoted !== "up" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "up" ? "0 0 16px rgba(0,255,136,0.4)" : "0 2px 8px rgba(0,0,0,0.3)" }}>
               <Icon d={Icons.rocket} size={15} color={userVoted === "up" ? "#000" : "#00ff88"} />
             </button>
             {votes.up > 0 && <div style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, background: "#00ff88", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px", boxShadow: "0 0 6px rgba(0,255,136,0.5)" }}><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: "#000", letterSpacing: -0.5 }}>{votes.up > 999 ? "1k+" : votes.up}</span></div>}
           </div>
-          {/* Vote DOWN — with count badge */}
           <div style={{ position: "relative" }}>
-            <button onClick={() => handleVote("down")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.12)"}`, background: userVoted === "down" ? "linear-gradient(135deg,#ff4444,#cc2222)" : "rgba(255,68,68,0.05)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "down" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "down" ? "0 0 16px rgba(255,68,68,0.4)" : "none" }}>
+            <button onClick={() => handleVote("down")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.12)"}`, background: userVoted === "down" ? "linear-gradient(135deg,#ff4444,#cc2222)" : "rgba(10,4,14,0.7)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: userVoted && userVoted !== "down" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "down" ? "0 0 16px rgba(255,68,68,0.4)" : "0 2px 8px rgba(0,0,0,0.3)" }}>
               <Icon d={Icons.skull} size={15} color={userVoted === "down" ? "#fff" : "#ff4444"} />
             </button>
             {votes.down > 0 && <div style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, background: "#ff4444", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px", boxShadow: "0 0 6px rgba(255,68,68,0.5)" }}><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{votes.down > 999 ? "1k+" : votes.down}</span></div>}
           </div>
-          {/* Buy/Sell — green glow halo */}
+          {/* Bullish % pill */}
+          <div style={{ height: 38, padding: "0 10px", borderRadius: 10, background: "rgba(10,4,14,0.7)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 4, boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: vr >= 50 ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{vr.toFixed(0)}%</span>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ BOTTOM BAR — 2026 glassmorphism + neon glow ═══ */}
+      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "rgba(6,2,10,0.65)", backdropFilter: "blur(20px) saturate(1.4)", WebkitBackdropFilter: "blur(20px) saturate(1.4)", borderTop: "1px solid rgba(255,45,120,0.12)", paddingBottom: "max(6px, env(safe-area-inset-bottom))", boxShadow: "0 -4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)", opacity: hudVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
+        <div style={{ display: "flex", gap: 4, padding: "7px 8px", alignItems: "center" }}>
+          {/* Chat input */}
+          <input ref={chatInputRef} className="chat-input" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say something..." style={{ flex: 1, minWidth: 0, padding: "9px 12px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2, transition: "all 0.25s ease" }} />
+          {/* Console button — cyan, toggles panel */}
+          <button onClick={() => { setConsoleOpen(p => { if (!p) { setShowBuySheet(false); setQuickBuyUSD(null); setShowStepUpModal(false); } return !p; }); }} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${consoleOpen ? "#00d4ff" : "rgba(0,212,255,0.15)"}`, background: consoleOpen ? "rgba(0,212,255,0.12)" : "rgba(0,212,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: consoleOpen ? "consoleGlow 2s ease infinite" : "none", boxShadow: consoleOpen ? "0 0 16px rgba(0,212,255,0.3)" : "none" }}>
+            <Icon d={Icons.barChart} size={15} color={consoleOpen ? "#00d4ff" : "rgba(0,212,255,0.6)"} />
+          </button>
+          {/* Buy/Sell */}
           {speakerInfo && userPositions.some(p => p.coin === speakerInfo.coin.ticker) ? (
             <>
               <button onClick={(e) => { e.stopPropagation(); handleSell(speakerInfo.coin.ticker); }} style={{ height: 38, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(255,68,68,0.25)", background: "rgba(255,68,68,0.08)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.2s", letterSpacing: -0.3 }}>Sell</button>
-              <button onClick={(e) => { e.stopPropagation(); setShowBuySheet(true); }} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000", fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.2s", letterSpacing: -0.3, animation: "buyGlow 2s ease infinite", boxShadow: "0 0 12px rgba(0,255,136,0.3)" }}>
-                <Icon d={Icons.zap} size={12} color="#000" />Buy
+              <button onClick={(e) => { e.stopPropagation(); setConsoleOpen(false); setShowBuySheet(true); }} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", letterSpacing: -0.3, animation: "buyGlow 2s ease infinite", boxShadow: "0 0 12px rgba(0,255,136,0.3)" }}>
+                <Icon d={Icons.zap} size={15} color="#000" />
               </button>
             </>
           ) : (
-            <button onClick={() => speakerInfo && setShowBuySheet(true)} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.08)", color: speakerInfo ? "#000" : "#00ff8844", fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, opacity: !speakerInfo ? 0.3 : 1, transition: "all 0.2s", letterSpacing: -0.3, animation: speakerInfo ? "buyGlow 2s ease infinite" : "none", boxShadow: speakerInfo ? "0 0 12px rgba(0,255,136,0.3)" : "none" }}>
-              <Icon d={Icons.zap} size={12} color={speakerInfo ? "#000" : "#00ff8844"} />Buy
+            <button onClick={() => { if (speakerInfo) { setConsoleOpen(false); setShowBuySheet(true); } }} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.08)", color: speakerInfo ? "#000" : "#00ff8844", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : 1, transition: "all 0.2s", animation: speakerInfo ? "buyGlow 2s ease infinite" : "none", boxShadow: speakerInfo ? "0 0 12px rgba(0,255,136,0.3)" : "none" }}>
+              <Icon d={Icons.zap} size={15} color={speakerInfo ? "#000" : "#00ff8844"} />
             </button>
           )}
           {/* Mic — pink glow halo */}
-          <button onClick={handleMicTap} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: "micGlow 2.5s ease infinite", boxShadow: "0 0 12px rgba(255,45,120,0.3)" }}>
+          <button onClick={() => { setConsoleOpen(false); handleMicTap(); }} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: "micGlow 2.5s ease infinite", boxShadow: "0 0 12px rgba(255,45,120,0.3)" }}>
             <Icon d={Icons.mic} size={15} color="#fff" />
           </button>
         </div>
       </div>
+
+      {/* ═══ CONSOLE PANEL — Habbo-style tabbed info panel ═══ */}
+      {consoleOpen && (
+        <div data-ui="1" style={{
+          position: "absolute", bottom: 52, left: 0, right: 0, zIndex: 9,
+          height: "45vh", maxHeight: 420,
+          background: "rgba(8,4,12,0.97)",
+          backdropFilter: "blur(32px) saturate(1.6)", WebkitBackdropFilter: "blur(32px) saturate(1.6)",
+          border: "1px solid rgba(0,212,255,0.08)", borderBottom: "none",
+          borderRadius: "16px 16px 0 0",
+          animation: "consoleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
+          display: "flex", flexDirection: "column",
+          boxShadow: "0 -8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(0,212,255,0.06)",
+        }}>
+          {/* Handle bar */}
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: "rgba(0,212,255,0.2)", margin: "8px auto 0", flexShrink: 0 }} />
+
+          {/* Tab rail — Habbo-style */}
+          <div style={{ display: "flex", gap: 0, padding: "8px 12px 0", flexShrink: 0, borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+            {[
+              { id: "discover", icon: Icons.compass, label: "Discover" },
+              { id: "portfolio", icon: Icons.pieChart, label: "Portfolio" },
+              { id: "room", icon: Icons.users, label: "Room" },
+              { id: "activity", icon: Icons.activity, label: "Activity" },
+            ].map(tab => (
+              <button key={tab.id} onClick={() => setConsoleTab(tab.id)} style={{
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                padding: "6px 4px 8px", background: "none", border: "none", cursor: "pointer",
+                borderBottom: consoleTab === tab.id ? "2px solid #00d4ff" : "2px solid transparent",
+                transition: "all 0.2s",
+              }}>
+                <Icon d={tab.icon} size={14} color={consoleTab === tab.id ? "#00d4ff" : "#555"} style={consoleTab === tab.id ? { filter: "drop-shadow(0 0 4px rgba(0,212,255,0.5))" } : {}} />
+                <span style={{ fontFamily: "'Inter'", fontSize: 10, fontWeight: consoleTab === tab.id ? 700 : 500, color: consoleTab === tab.id ? "#fff" : "#555", letterSpacing: -0.2 }}>{tab.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div style={{ flex: 1, overflow: "auto", padding: "10px 12px", scrollbarWidth: "none", msOverflowStyle: "none", animation: "tabSlide 0.2s ease" }} key={consoleTab}>
+
+            {/* ═══ DISCOVER TAB ═══ */}
+            {consoleTab === "discover" && (() => {
+              const filtered = COINS.filter(c =>
+                !consoleSearchQuery || c.ticker.toLowerCase().includes(consoleSearchQuery.toLowerCase()) || c.ca.toLowerCase().includes(consoleSearchQuery.toLowerCase())
+              );
+              return (
+                <>
+                  {/* Search bar */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(0,212,255,0.08)", marginBottom: 12 }}>
+                    <Icon d={Icons.search} size={14} color="rgba(0,212,255,0.4)" />
+                    <input value={consoleSearchQuery} onChange={e => setConsoleSearchQuery(e.target.value)} placeholder="Search tokens..." style={{ flex: 1, background: "none", border: "none", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2 }} />
+                    {consoleSearchQuery && <button onClick={() => setConsoleSearchQuery("")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Icon d={Icons.x} size={12} color="#555" /></button>}
+                  </div>
+
+                  {/* Trending section */}
+                  {!consoleSearchQuery && (
+                    <>
+                      <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>TRENDING NOW</div>
+                      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 10, marginBottom: 8, scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                        {COINS.filter(c => c.positive).map((coin, i) => (
+                          <div key={i} onClick={() => { if (speakerInfo) { setConsoleOpen(false); setShowBuySheet(true); } }} style={{
+                            minWidth: 140, padding: "10px 12px", borderRadius: 12, cursor: "pointer",
+                            background: "rgba(255,255,255,0.03)",
+                            border: "1px solid rgba(0,212,255,0.06)",
+                            backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+                            transition: "all 0.2s",
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                              <span style={{ fontFamily: "'Inter'", fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{coin.ticker}</span>
+                              <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{coin.change}</span>
+                            </div>
+                            <MiniChart data={generateChart(coin.positive, 24)} positive={coin.positive} width={120} height={32} />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/* All tokens list */}
+                  <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>ALL TOKENS</div>
+                  {filtered.map((coin, i) => (
+                    <div key={i} onClick={() => { if (speakerInfo) { setConsoleOpen(false); setShowBuySheet(true); } }} style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "8px 6px", height: 44,
+                      borderBottom: "1px solid rgba(255,255,255,0.03)", cursor: "pointer",
+                      transition: "background 0.15s",
+                    }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg,${coin.positive ? "#00ff88" : "#ff4444"},${coin.positive ? "#00cc66" : "#cc2222"})`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 900, fontSize: 11, color: coin.positive ? "#000" : "#fff", flexShrink: 0 }}>{coin.ticker[1]}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: "'Inter'", fontSize: 12, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{coin.ticker}</div>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{coin.mcap}</div>
+                      </div>
+                      <div style={{ textAlign: "right", marginRight: 4 }}>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>${coin.price}</div>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{coin.change}</div>
+                      </div>
+                      <MiniChart data={generateChart(coin.positive, 20)} positive={coin.positive} width={60} height={20} />
+                    </div>
+                  ))}
+                  {filtered.length === 0 && <div style={{ fontFamily: "'Inter'", fontSize: 12, color: "#555", textAlign: "center", padding: 20 }}>No tokens found</div>}
+                </>
+              );
+            })()}
+
+            {/* ═══ PORTFOLIO TAB ═══ */}
+            {consoleTab === "portfolio" && (() => {
+              const totalValue = userPositions.reduce((sum, p) => sum + p.amount * solPrice * (p.current / p.entry), 0);
+              const totalCost = userPositions.reduce((sum, p) => sum + p.amount * solPrice, 0);
+              const totalPnl = totalCost > 0 ? ((totalValue - totalCost) / totalCost * 100) : 0;
+              return (
+                <>
+                  {/* Portfolio header */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "8px 4px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", marginBottom: 12 }}>
+                    <div>
+                      <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 6, letterSpacing: 0.5 }}>TOTAL VALUE</div>
+                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 22, fontWeight: 700, color: "#fff", letterSpacing: -1 }}>${totalValue.toFixed(2)}</div>
+                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 600, color: totalPnl >= 0 ? "#00ff88" : "#ff4444", letterSpacing: -0.3, marginTop: 2 }}>
+                        {totalPnl >= 0 ? "+" : ""}{(totalValue - totalCost).toFixed(2)} ({totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(1)}%)
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 6, letterSpacing: 0.5 }}>YOUR POSITIONS</div>
+                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 16, fontWeight: 700, color: "#fff" }}>{userPositions.length} tokens</div>
+                    </div>
+                  </div>
+
+                  {/* Position cards */}
+                  {userPositions.length > 0 ? userPositions.map((pos, i) => {
+                    const pnl = ((pos.current - pos.entry) / pos.entry * 100);
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 6px", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontFamily: "'Inter'", fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{pos.coin}</div>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{pos.amount.toFixed(2)} SOL</div>
+                        </div>
+                        <div style={{ textAlign: "right", marginRight: 8 }}>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 700, color: pnl >= 0 ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(1)}%</div>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>${(pos.amount * solPrice * (pos.current / pos.entry)).toFixed(0)}</div>
+                        </div>
+                        <button onClick={() => handleSell(pos.coin)} style={{ height: 30, padding: "0 10px", borderRadius: 8, border: "1px solid rgba(255,68,68,0.2)", background: "rgba(255,68,68,0.06)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 10, cursor: "pointer", letterSpacing: -0.2 }}>Sell</button>
+                      </div>
+                    );
+                  }) : (
+                    <div style={{ textAlign: "center", padding: "30px 20px" }}>
+                      <div style={{ fontFamily: "'Inter'", fontSize: 13, fontWeight: 600, color: "#555", marginBottom: 4 }}>No positions yet</div>
+                      <div style={{ fontFamily: "'Inter'", fontSize: 11, color: "#444" }}>Buy a token to see your portfolio here</div>
+                    </div>
+                  )}
+
+                  {/* Session stats */}
+                  <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginTop: 16, marginBottom: 8, letterSpacing: 0.5 }}>SESSION STATS</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { label: "Volume", value: `$${(callVolume / 1000).toFixed(1)}K` },
+                      { label: "Trades", value: `${userPositions.length + activityFeed.filter(a => a.user === "you").length}` },
+                      { label: "Fee Rev", value: `$${platformRevenue.toFixed(0)}` },
+                    ].map((s, i) => (
+                      <div key={i} style={{ flex: 1, padding: "10px 8px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.06)", textAlign: "center" }}>
+                        <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 600, color: "#555", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>{s.label}</div>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{s.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* ═══ ROOM TAB ═══ */}
+            {consoleTab === "room" && (
+              <>
+                {/* On stage now */}
+                {speakerInfo ? (
+                  <>
+                    <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>ON STAGE NOW</div>
+                    <div style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(0,212,255,0.06)", marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: `linear-gradient(135deg,#ff2d78,#ff6622)`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 900, fontSize: 14, color: "#fff" }}>{speakerInfo.name[0].toUpperCase()}</div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontFamily: "'Inter'", fontSize: 14, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{speakerInfo.name}</div>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{speakerInfo.followers} followers</div>
+                        </div>
+                      </div>
+                      <div style={{ fontFamily: "'Inter'", fontSize: 11, color: "#888", marginBottom: 6, letterSpacing: -0.2 }}>
+                        Calling {speakerInfo.coin.ticker} · <span style={{ fontFamily: "'JetBrains Mono'", color: "#00d4ff" }}>{Math.floor(speakerTimeLeft)}s</span> remaining
+                      </div>
+                      <div style={{ display: "flex", gap: 12, fontFamily: "'JetBrains Mono'", fontSize: 11, letterSpacing: -0.3 }}>
+                        <span style={{ color: "#00ff88" }}>🚀 {votes.up}</span>
+                        <span style={{ color: "#ff4444" }}>💀 {votes.down}</span>
+                        <span style={{ color: vr >= 50 ? "#00ff88" : "#ff4444" }}>({vr.toFixed(0)}% bullish)</span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter'", fontSize: 12, color: "#555" }}>No one on stage</div>
+                )}
+
+                {/* Queue */}
+                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>QUEUE ({queue.length})</div>
+                {queue.length > 0 ? queue.map((q, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 700, color: "#00d4ff", width: 18 }}>{i + 1}.</span>
+                    <span style={{ fontFamily: "'Inter'", fontSize: 12, fontWeight: 600, color: "#fff", flex: 1, letterSpacing: -0.2 }}>{q.name}</span>
+                    <span style={{ fontFamily: "'Inter'", fontSize: 11, color: "#666", letterSpacing: -0.2 }}>→ {q.coin.ticker}</span>
+                  </div>
+                )) : (
+                  <div style={{ fontFamily: "'Inter'", fontSize: 11, color: "#555", padding: "8px 6px" }}>No one in queue</div>
+                )}
+
+                {/* In the room */}
+                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginTop: 14, marginBottom: 8, letterSpacing: 0.5 }}>IN THE ROOM ({liveCount})</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                  {PFP_NAMES.slice(0, 12).map((name, i) => (
+                    <div key={i} style={{ width: 32, height: 32, borderRadius: "50%", background: `hsl(${(i * 47 + 120) % 360},70%,50%)`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 800, fontSize: 10, color: "#fff", border: "2px solid rgba(8,4,12,0.97)" }}>{name[0].toUpperCase()}</div>
+                  ))}
+                </div>
+                <div style={{ fontFamily: "'Inter'", fontSize: 10, color: "#555", letterSpacing: -0.2 }}>+{Math.max(0, liveCount - 12)} more</div>
+              </>
+            )}
+
+            {/* ═══ ACTIVITY TAB ═══ */}
+            {consoleTab === "activity" && (
+              <>
+                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>LIVE FEED</div>
+                {activityFeed.slice(-15).reverse().map((item, i) => (
+                  <div key={i} style={{
+                    display: "flex", alignItems: "center", gap: 6, padding: "7px 6px",
+                    borderBottom: "1px solid rgba(255,255,255,0.03)",
+                    animation: i === 0 ? "slideIn 0.3s ease" : "none",
+                  }}>
+                    <Icon d={item.action === "bought" ? Icons.zap : Icons.trending} size={12} color={item.action === "bought" ? "#00d4ff" : "#00ff88"} />
+                    <div style={{ flex: 1, fontFamily: "'Inter'", fontSize: 11, letterSpacing: -0.2, color: "#ccc" }}>
+                      <span style={{ fontWeight: 700, color: "#fff" }}>{item.user}</span>
+                      <span style={{ color: "#555" }}> {item.action === "bought" ? "bought" : "up"} </span>
+                      <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 600, color: item.action === "bought" ? "#00d4ff" : "#00ff88" }}>{item.amount}</span>
+                      <span style={{ color: "#555" }}> {item.coin}</span>
+                    </div>
+                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 9, color: "#444", letterSpacing: -0.3 }}>{Math.floor(i * 3 + 2)}s</span>
+                  </div>
+                ))}
+                {activityFeed.length === 0 && <div style={{ fontFamily: "'Inter'", fontSize: 12, color: "#555", textAlign: "center", padding: 20 }}>No activity yet</div>}
+
+                {/* Stats */}
+                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginTop: 14, marginBottom: 8, letterSpacing: 0.5 }}>SESSION</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[
+                    { label: "Volume", value: `$${(callVolume / 1000).toFixed(1)}K` },
+                    { label: "Trades", value: `${activityFeed.length}` },
+                    { label: "Revenue", value: `$${platformRevenue.toFixed(0)}` },
+                  ].map((s, i) => (
+                    <div key={i} style={{ flex: 1, padding: "10px 8px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.06)", textAlign: "center" }}>
+                      <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 600, color: "#555", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>{s.label}</div>
+                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ═══ STEP UP MODAL ═══ */}
       {showStepUpModal && (
@@ -3050,105 +3624,50 @@ export default function PodiumTeleport() {
         </div>
       )}
 
-      {/* ═══ BUY SHEET ═══ */}
+      {/* ═══ QUICK BUY TOOLTIP — select → confirm, no misclicks ═══ */}
       {showBuySheet && speakerInfo && (
-        <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 50, animation: "modalUp 0.3s ease" }}>
-          <div style={{ background: "rgba(0,0,0,0.5)", position: "absolute", top: -1000, left: 0, right: 0, bottom: 0 }} onClick={() => setShowBuySheet(false)} />
-          <div style={{ background: "rgba(12,6,16,0.98)", backdropFilter: "blur(24px)", borderRadius: "20px 20px 0 0", padding: "20px", paddingBottom: "max(20px, env(safe-area-inset-bottom))", border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none", position: "relative" }}>
-            {/* Handle bar */}
-            <div style={{ width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.15)", margin: "-4px auto 16px" }} />
-            {/* Coin header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, paddingRight: 32 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#00ff88,#00cc66)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 900, fontSize: 15, color: "#000" }}>{speakerInfo.coin.ticker[1]}</div>
-                <div>
-                  <div style={{ fontFamily: "'Inter'", fontWeight: 700, fontSize: 16, color: "#fff", letterSpacing: -0.5 }}>{speakerInfo.coin.ticker}</div>
-                  <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{speakerInfo.coin.mcap}</div>
-                </div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 16, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>${speakerInfo.coin.price}</div>
-                <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: speakerInfo.coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{speakerInfo.coin.change}</div>
-              </div>
-              <button onClick={() => setShowBuySheet(false)} style={{ position: "absolute", top: 20, right: 16, background: "rgba(255,255,255,0.06)", border: "none", color: "#666", width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Icon d={Icons.x} size={14} color="#666" />
-              </button>
+        <div data-ui="1" style={{ position: "absolute", bottom: 56, right: 8, zIndex: 50, width: 178, animation: "slideIn 0.15s cubic-bezier(0.16, 1, 0.3, 1)" }}>
+          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }} onClick={() => { setShowBuySheet(false); setQuickBuyUSD(null); }} />
+          <div style={{ background: "rgba(12,8,18,0.88)", backdropFilter: "blur(16px) saturate(1.3)", WebkitBackdropFilter: "blur(16px) saturate(1.3)", borderRadius: 12, padding: "8px 8px 6px", border: "1px solid rgba(0,255,136,0.1)", boxShadow: "0 4px 20px rgba(0,0,0,0.6)" }}>
+            {/* Header: ticker + change */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontFamily: "'Inter'", fontWeight: 800, fontSize: 11, color: "#fff", letterSpacing: -0.3 }}>{speakerInfo.coin.ticker}</span>
+              <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: speakerInfo.coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{speakerInfo.coin.change}</span>
             </div>
-
-            {/* Amount display */}
-            <div style={{ textAlign: "center", padding: "20px 0 16px" }}>
-              <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 36, fontWeight: 700, color: buyAmount ? "#fff" : "#333", letterSpacing: -1.5, transition: "color 0.2s" }}>${buyAmount || "0"}</div>
-            </div>
-
-            {/* Percentage buttons */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              {[10, 25, 50, "Max"].map(pct => (
-                <button key={pct} onClick={() => { const v = pct === "Max" ? walletBalance : (walletBalance * pct / 100); setBuyAmount(v.toFixed(2)); }} style={{ flex: 1, padding: "9px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "#aaa", fontFamily: "'Inter'", fontSize: 12, fontWeight: 600, cursor: "pointer", letterSpacing: -0.2, transition: "all 0.15s" }}>{pct === "Max" ? "Max" : `${pct}%`}</button>
+            {/* Amount row — tap to select */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+              {[5, 10, 25, 50].map(usd => (
+                <button key={usd} onClick={() => setQuickBuyUSD(quickBuyUSD === usd ? null : usd)} style={{
+                  flex: 1, padding: "7px 0", borderRadius: 7, cursor: "pointer",
+                  fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 700, letterSpacing: -0.5,
+                  border: quickBuyUSD === usd ? "1.5px solid #00ff88" : "1px solid rgba(255,255,255,0.06)",
+                  background: quickBuyUSD === usd ? "rgba(0,255,136,0.12)" : "rgba(255,255,255,0.03)",
+                  color: quickBuyUSD === usd ? "#00ff88" : "#888",
+                  transition: "all 0.12s",
+                }}>${usd}</button>
               ))}
             </div>
-
-            {/* Number pad */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 14 }}>
-              {[1,2,3,4,5,6,7,8,9,".",0,"del"].map(key => (
-                <button key={key} onClick={() => { if (key === "del") setBuyAmount(p => p.slice(0,-1)); else setBuyAmount(p => p + key); }} style={{ padding: "14px", borderRadius: 12, border: "none", background: "rgba(255,255,255,0.04)", color: key === "del" ? "#666" : "#fff", fontFamily: key === "del" ? "'Inter'" : "'JetBrains Mono'", fontSize: key === "del" ? 12 : 18, fontWeight: key === "del" ? 500 : 600, cursor: "pointer", transition: "background 0.1s", letterSpacing: -0.5 }}>
-                  {key === "del" ? <Icon d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM18 9l-6 6M12 9l6 6" size={16} color="#666" /> : key}
-                </button>
-              ))}
-            </div>
-
-            {/* Balance */}
-            <div style={{ fontFamily: "'Inter'", fontSize: 12, color: "#555", display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginBottom: 10 }}>
-              <Icon d={Icons.wallet} size={12} color="#555" />
-              ${(walletBalance * 180).toFixed(2)} available
-            </div>
-
-            {/* Fee breakdown — the flywheel */}
-            {buyAmount && parseFloat(buyAmount) > 0 && (() => {
-              const usd = parseFloat(buyAmount) * 180;
-              return (
-                <div style={{ marginBottom: 12, padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 600, color: "#555", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Fee Breakdown (1%)</div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                    <span style={{ fontFamily: "'Inter'", fontSize: 11, color: "#777" }}>{speakerInfo.name} earns</span>
-                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: "#00ff88", letterSpacing: -0.3 }}>${(usd * FEE_CALLER).toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                    <span style={{ fontFamily: "'Inter'", fontSize: 11, color: "#777" }}>Platform</span>
-                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: "#888", letterSpacing: -0.3 }}>${(usd * FEE_PLATFORM).toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontFamily: "'Inter'", fontSize: 11, color: "#777" }}>Protocol</span>
-                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: "#888", letterSpacing: -0.3 }}>${(usd * FEE_TREASURY).toFixed(2)}</span>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Privacy mode toggle */}
-            <div onClick={() => setPrivacyMode(p => !p)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", marginBottom: 10, borderRadius: 10, background: privacyMode ? "rgba(255,45,120,0.06)" : "rgba(255,255,255,0.02)", border: `1px solid ${privacyMode ? "rgba(255,45,120,0.15)" : "rgba(255,255,255,0.04)"}`, cursor: "pointer", transition: "all 0.2s" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Icon d={Icons.shield} size={12} color={privacyMode ? "#ff2d78" : "#555"} />
-                <span style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 600, color: privacyMode ? "#ff2d78" : "#666", letterSpacing: -0.2 }}>Privacy Mode</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontFamily: "'Inter'", fontSize: 9, color: "#555" }}>{privacyMode ? "Trade as anon" : "Trade publicly"}</span>
-                <div style={{ width: 28, height: 16, borderRadius: 8, background: privacyMode ? "#ff2d78" : "rgba(255,255,255,0.1)", position: "relative", transition: "background 0.2s" }}>
-                  <div style={{ width: 12, height: 12, borderRadius: 6, background: "#fff", position: "absolute", top: 2, left: privacyMode ? 14 : 2, transition: "left 0.2s" }} />
-                </div>
-              </div>
-            </div>
-
-            {/* Buy button */}
-            <button onClick={handleBuy} disabled={!buyAmount || parseFloat(buyAmount) <= 0 || parseFloat(buyAmount) > walletBalance} style={{ width: "100%", padding: "15px", borderRadius: 14, border: "none", background: buyAmount && parseFloat(buyAmount) > 0 && parseFloat(buyAmount) <= walletBalance ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(255,255,255,0.06)", color: buyAmount && parseFloat(buyAmount) > 0 ? "#000" : "#444", fontFamily: "'Inter'", fontWeight: 800, fontSize: 15, cursor: "pointer", letterSpacing: -0.3, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, transition: "all 0.2s ease" }}>
-              {buyAmount && parseFloat(buyAmount) > 0 ? <Icon d={Icons.zap} size={16} color="#000" /> : null}
-              {buyAmount && parseFloat(buyAmount) > 0 ? (privacyMode ? `Buy ${speakerInfo.coin.ticker} (anon)` : `Buy ${speakerInfo.coin.ticker}`) : "Enter an amount"}
+            {/* Confirm button — only active when amount selected */}
+            <button onClick={() => { if (quickBuyUSD) handleQuickBuy(quickBuyUSD); }} disabled={!quickBuyUSD} style={{
+              width: "100%", padding: "8px 0", borderRadius: 8, border: "none",
+              background: quickBuyUSD ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(255,255,255,0.03)",
+              color: quickBuyUSD ? "#000" : "#333",
+              fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, cursor: quickBuyUSD ? "pointer" : "default",
+              letterSpacing: -0.3, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+              transition: "all 0.15s",
+            }}>
+              {quickBuyUSD ? <><Icon d={Icons.zap} size={11} color="#000" />Buy ${quickBuyUSD} {speakerInfo.coin.ticker}</> : "Select amount"}
             </button>
+            {/* Balance hint */}
+            <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "#333", textAlign: "center", marginTop: 4, letterSpacing: -0.2 }}>${(walletBalance * solPrice).toFixed(0)} bal · 1% → {speakerInfo.name}</div>
           </div>
+          {/* Tooltip arrow */}
+          <div style={{ position: "absolute", bottom: -5, right: 38, width: 10, height: 10, background: "rgba(12,8,18,0.88)", transform: "rotate(45deg)", border: "1px solid rgba(0,255,136,0.1)", borderTop: "none", borderLeft: "none" }} />
         </div>
       )}
 
       {/* ═══ FLOATING POSITION CARD ═══ */}
-      {userPositions.length > 0 && (
+      {userPositions.length > 0 && !consoleOpen && (
         <div data-ui="1" style={{ position: "absolute", bottom: 70, right: 10, zIndex: 15 }}>
           {userPositions.slice(-1).map((pos, i) => {
             const pnl = ((pos.current - pos.entry) / pos.entry * 100);
@@ -3159,7 +3678,7 @@ export default function PodiumTeleport() {
                   <span style={{ fontFamily: "'Inter'", fontWeight: 700, fontSize: 12, color: "#fff", letterSpacing: -0.3 }}>{pos.coin}</span>
                   <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 700, fontSize: 11, color: pnlColor, letterSpacing: -0.3 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(1)}%</span>
                 </div>
-                <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3, marginTop: 2 }}>{pos.amount.toFixed(2)} SOL <span style={{ color: pnlColor }}>${(pos.amount * 180 * (1 + pnl/100)).toFixed(0)}</span></div>
+                <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3, marginTop: 2 }}>{pos.amount.toFixed(2)} SOL <span style={{ color: pnlColor }}>${(pos.amount * solPrice * (1 + pnl/100)).toFixed(0)}</span></div>
               </div>
             );
           })}
