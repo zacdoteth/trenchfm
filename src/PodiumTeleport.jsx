@@ -2865,14 +2865,20 @@ export default function PodiumTeleport() {
         @keyframes announceSub{0%{opacity:0;transform:translateY(12px)}15%{opacity:0;transform:translateY(12px)}25%{opacity:1;transform:translateY(0)}75%{opacity:1;transform:translateY(0)}90%{opacity:0}}
         @keyframes announceGlow{0%{opacity:0;transform:scale(0.5)}15%{opacity:0.6;transform:scale(1)}50%{opacity:0.3;transform:scale(1.2)}100%{opacity:0;transform:scale(1.5)}}
         @keyframes announcePulse{0%,100%{opacity:0.4}50%{opacity:1}}
-        @keyframes chatBubbleUp{0%{opacity:0;transform:translateY(4px)}8%{opacity:1;transform:translateY(0)}75%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
+        @keyframes chatBubbleUp{0%{opacity:0;transform:translateX(-12px)}6%{opacity:1;transform:translateX(0)}78%{opacity:0.9;transform:translateX(0)}100%{opacity:0;transform:translateX(4px)}}
+        @keyframes neonPulse{0%,100%{box-shadow:0 0 8px rgba(255,45,120,0.3),inset 0 0 8px rgba(255,45,120,0.05)}50%{box-shadow:0 0 16px rgba(255,45,120,0.5),inset 0 0 12px rgba(255,45,120,0.08)}}
+        @keyframes inputGlow{0%,100%{border-color:rgba(255,45,120,0.3);box-shadow:0 0 6px rgba(255,45,120,0.15)}50%{border-color:rgba(255,45,120,0.6);box-shadow:0 0 12px rgba(255,45,120,0.3)}}
+        @keyframes buyGlow{0%,100%{box-shadow:0 0 8px rgba(0,255,136,0.3)}50%{box-shadow:0 0 20px rgba(0,255,136,0.5)}}
+        @keyframes micGlow{0%,100%{box-shadow:0 0 8px rgba(255,45,120,0.3)}50%{box-shadow:0 0 20px rgba(255,45,120,0.5)}}
+        @keyframes chatSlideIn{from{transform:translateX(-16px);opacity:0}to{transform:translateX(0);opacity:1}}
+        .chat-input:focus{border-color:rgba(255,45,120,0.5)!important;box-shadow:0 0 12px rgba(255,45,120,0.2)!important;background:rgba(255,45,120,0.04)!important}
       `}</style>
 
       <div ref={mountRef} style={{ width: "100%", height: "100%", touchAction: "none", cursor: "grab" }} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU} />
 
-      {/* TOP BAR */}
-      <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "linear-gradient(180deg,rgba(10,0,8,0.92) 60%,transparent 100%)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1, filter: `hue-rotate(${((stateRef.current?.domeHueShift || 0) + (stateRef.current?.clock || 0) * 0.0083) * 360 % 360}deg)` }}>trench.fm</div>
+      {/* TOP BAR — glass HUD */}
+      <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "linear-gradient(180deg,rgba(6,2,10,0.7) 50%,transparent 100%)", backdropFilter: "blur(12px) saturate(1.3)", WebkitBackdropFilter: "blur(12px) saturate(1.3)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1, filter: `hue-rotate(${((stateRef.current?.domeHueShift || 0) + (stateRef.current?.clock || 0) * 0.0083) * 360 % 360}deg)`, textShadow: "0 0 20px rgba(255,45,120,0.4)" }}>trench.fm</div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {queue.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(255,45,120,0.08)", border: "1px solid rgba(255,45,120,0.2)" }}>
@@ -2941,48 +2947,67 @@ export default function PodiumTeleport() {
         </div>
       )}
 
-      {/* ═══ FLOATING CHAT — Habbo-style bubbles over the scene ═══ */}
-      <div data-ui="1" style={{ position: "absolute", bottom: 56, left: 0, right: 0, zIndex: 9, pointerEvents: "none", padding: "0 14px", display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflow: "hidden", maskImage: "linear-gradient(to bottom,transparent 0%,black 25%,black 100%)", WebkitMaskImage: "linear-gradient(to bottom,transparent 0%,black 25%,black 100%)" }}>
-        {chatMessages.slice(-8).map((m, i, arr) => (
-          <div key={chatMessages.length - 8 + i} style={{
-            fontFamily: "'Inter'", fontSize: 12, lineHeight: 1.4, letterSpacing: -0.2,
-            animation: `chatBubbleUp ${i === arr.length - 1 ? "6s" : "5s"} ease forwards`,
-            opacity: 0,
-          }}>
-            <span style={{ color: m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`, fontWeight: 600, fontSize: 11 }}>{m.user}</span>
-            <span style={{ color: "#444", margin: "0 4px" }}>·</span>
-            <span style={{ color: "#bbb", fontWeight: 400 }}>{m.msg}</span>
-          </div>
-        ))}
+      {/* ═══ FLOATING CHAT — glass pill HUD feed ═══ */}
+      <div data-ui="1" style={{ position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 9, pointerEvents: "none", padding: "0 10px", display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflow: "hidden", maskImage: "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", WebkitMaskImage: "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)" }}>
+        {chatMessages.slice(-6).map((m, i, arr) => {
+          const userColor = m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`;
+          return (
+            <div key={chatMessages.length - 6 + i} style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "5px 10px 5px 8px",
+              background: "rgba(10,4,14,0.55)",
+              backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)",
+              borderRadius: 8,
+              borderLeft: `2px solid ${userColor}`,
+              alignSelf: "flex-start",
+              maxWidth: "85%",
+              animation: `chatBubbleUp ${i === arr.length - 1 ? "6s" : "5s"} ease-out forwards`,
+              opacity: 0,
+              boxShadow: `0 2px 8px rgba(0,0,0,0.3), inset 0 0 12px rgba(${m.user === "trench.fm" ? "255,45,120" : m.user === "you" ? "0,255,136" : "255,255,255"},0.03)`,
+            }}>
+              <span style={{ fontFamily: "'Inter'", color: userColor, fontWeight: 700, fontSize: 10.5, letterSpacing: -0.2, whiteSpace: "nowrap" }}>{m.user}</span>
+              <span style={{ fontFamily: "'Inter'", color: "rgba(255,255,255,0.75)", fontWeight: 400, fontSize: 11.5, letterSpacing: -0.2, lineHeight: 1.35 }}>{m.msg}</span>
+            </div>
+          );
+        })}
         <div ref={chatEndRef} />
       </div>
 
-      {/* ═══ BOTTOM BAR — Habbo-style: input + actions on one row ═══ */}
-      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "rgba(8,4,12,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderTop: "1px solid rgba(255,255,255,0.06)", paddingBottom: "max(6px, env(safe-area-inset-bottom))" }}>
-        <div style={{ display: "flex", gap: 4, padding: "6px 10px", alignItems: "center" }}>
-          {/* Chat input — Habbo "Say" bar */}
-          <input ref={chatInputRef} value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say..." style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2 }} />
-          {/* Vote buttons */}
-          <button onClick={() => handleVote("up")} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.06)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "up" ? 0.3 : 1, transition: "all 0.15s" }}>
-            <Icon d={Icons.rocket} size={14} color={userVoted === "up" ? "#000" : "#00ff88"} />
-          </button>
-          <button onClick={() => handleVote("down")} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.15)"}`, background: userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.06)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "down" ? 0.3 : 1, transition: "all 0.15s" }}>
-            <Icon d={Icons.skull} size={14} color={userVoted === "down" ? "#fff" : "#ff4444"} />
-          </button>
-          {/* Buy button */}
+      {/* ═══ BOTTOM BAR — 2026 glassmorphism + neon glow ═══ */}
+      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "rgba(6,2,10,0.65)", backdropFilter: "blur(20px) saturate(1.4)", WebkitBackdropFilter: "blur(20px) saturate(1.4)", borderTop: "1px solid rgba(255,45,120,0.12)", paddingBottom: "max(6px, env(safe-area-inset-bottom))", boxShadow: "0 -4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)" }}>
+        <div style={{ display: "flex", gap: 4, padding: "7px 8px", alignItems: "center" }}>
+          {/* Chat input — neon glow on focus */}
+          <input ref={chatInputRef} className="chat-input" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say something..." style={{ flex: 1, minWidth: 0, padding: "9px 12px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2, transition: "all 0.25s ease" }} />
+          {/* Vote UP — with count badge */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => handleVote("up")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.06)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "up" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "up" ? "0 0 16px rgba(0,255,136,0.4)" : "none" }}>
+              <Icon d={Icons.rocket} size={15} color={userVoted === "up" ? "#000" : "#00ff88"} />
+            </button>
+            {votes.up > 0 && <div style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, background: "#00ff88", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px", boxShadow: "0 0 6px rgba(0,255,136,0.5)" }}><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: "#000", letterSpacing: -0.5 }}>{votes.up > 999 ? "1k+" : votes.up}</span></div>}
+          </div>
+          {/* Vote DOWN — with count badge */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => handleVote("down")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.12)"}`, background: userVoted === "down" ? "linear-gradient(135deg,#ff4444,#cc2222)" : "rgba(255,68,68,0.05)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "down" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "down" ? "0 0 16px rgba(255,68,68,0.4)" : "none" }}>
+              <Icon d={Icons.skull} size={15} color={userVoted === "down" ? "#fff" : "#ff4444"} />
+            </button>
+            {votes.down > 0 && <div style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, background: "#ff4444", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px", boxShadow: "0 0 6px rgba(255,68,68,0.5)" }}><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{votes.down > 999 ? "1k+" : votes.down}</span></div>}
+          </div>
+          {/* Buy/Sell — green glow halo */}
           {speakerInfo && userPositions.some(p => p.coin === speakerInfo.coin.ticker) ? (
             <>
-              <button onClick={(e) => { e.stopPropagation(); handleSell(speakerInfo.coin.ticker); }} style={{ height: 36, padding: "0 10px", borderRadius: 8, border: "1px solid rgba(255,68,68,0.2)", background: "rgba(255,68,68,0.08)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.15s" }}>Sell</button>
-              <button onClick={(e) => { e.stopPropagation(); setShowBuySheet(true); }} style={{ height: 36, padding: "0 12px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.15s" }}>Buy</button>
+              <button onClick={(e) => { e.stopPropagation(); handleSell(speakerInfo.coin.ticker); }} style={{ height: 38, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(255,68,68,0.25)", background: "rgba(255,68,68,0.08)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.2s", letterSpacing: -0.3 }}>Sell</button>
+              <button onClick={(e) => { e.stopPropagation(); setShowBuySheet(true); }} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000", fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.2s", letterSpacing: -0.3, animation: "buyGlow 2s ease infinite", boxShadow: "0 0 12px rgba(0,255,136,0.3)" }}>
+                <Icon d={Icons.zap} size={12} color="#000" />Buy
+              </button>
             </>
           ) : (
-            <button onClick={() => speakerInfo && setShowBuySheet(true)} style={{ height: 36, padding: "0 12px", borderRadius: 8, border: "none", background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.1)", color: speakerInfo ? "#000" : "#00ff8844", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, opacity: !speakerInfo ? 0.3 : 1, transition: "all 0.15s" }}>
+            <button onClick={() => speakerInfo && setShowBuySheet(true)} style={{ height: 38, padding: "0 14px", borderRadius: 10, border: "none", background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.08)", color: speakerInfo ? "#000" : "#00ff8844", fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, opacity: !speakerInfo ? 0.3 : 1, transition: "all 0.2s", letterSpacing: -0.3, animation: speakerInfo ? "buyGlow 2s ease infinite" : "none", boxShadow: speakerInfo ? "0 0 12px rgba(0,255,136,0.3)" : "none" }}>
               <Icon d={Icons.zap} size={12} color={speakerInfo ? "#000" : "#00ff8844"} />Buy
             </button>
           )}
-          {/* Mic button */}
-          <button onClick={handleMicTap} style={{ width: 36, height: 36, borderRadius: 8, border: "none", background: "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.15s" }}>
-            <Icon d={Icons.mic} size={14} color="#fff" />
+          {/* Mic — pink glow halo */}
+          <button onClick={handleMicTap} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: "micGlow 2.5s ease infinite", boxShadow: "0 0 12px rgba(255,45,120,0.3)" }}>
+            <Icon d={Icons.mic} size={15} color="#fff" />
           </button>
         </div>
       </div>
