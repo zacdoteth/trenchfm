@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import GUI from "lil-gui";
 
 // ═══════════════════════════════════════════════════════
@@ -232,13 +233,17 @@ export default function PodiumTeleport() {
     teleportTimer: 0, teleportCharIdx: null, prevSpeaker: null,
     cameraAngle: 0, cameraHeight: 5, cameraDist: 24, autoRotate: true, spinVelocity: 0, clock: 0,
     // Jumbotron debug params (live-tunable via GUI)
-    jmboY: 9, jmboScale: 0.5, jmboRotSpeed: 0.0,
+    jmboY: 6.9, jmboScale: 0.5, jmboRotSpeed: 0.0,
     // Speaker params
     speakerScale: 2.2, speakerY: 1.2,
+    // Mic stand params
+    micScale: 2.4, micY: 1.2, micZ: 1.8,
+    // Guitar params (held by speaker)
+    guitarScale: 1.35, guitarX: 0.05, guitarY: -0.25, guitarZ: -0.15, guitarRotX: 0.9584, guitarRotY: -0.391, guitarRotZ: -0.441,
     // Jumbotron intro animation (Mario Party style)
     jmboIntroTimer: 0, jmboIntroName: "", jmboIntroTicker: "", jmboIntroCharIdx: -1,
     // Dome / sky (Anadol)
-    domeHueShift: 0.62, domeSpeed: 0.2, domeIntensity: 1.0, domeBottomHalf: true,
+    domeHueShift: 0.62, domeSpeed: 0.2, domeIntensity: 2.0, domeBottomHalf: true,
     // Top calls leaderboard — prefilled for demo
     topCallsToday: [
       { ticker: "$BONK", change: "+4.2x", caller: "whale_alert", followers: "127K", timeAgo: "12m ago", fdv: "$1.8B", price: "0.00002847" },
@@ -266,6 +271,7 @@ export default function PodiumTeleport() {
   const [userVoted, setUserVoted] = useState(null);
   const [teleportVFX, setTeleportVFX] = useState(null);
   const chatEndRef = useRef(null);
+  const chatInputRef = useRef(null);
   const touchRef = useRef({ active: false, startX: 0, startY: 0, sa: 0, sh: 0, lastX: 0, lastY: 0, lastTime: 0, velX: 0, velY: 0 });
   const fpsBuf = useRef([]);
   const pfpImgsRef = useRef([]); // PFP images for announcements
@@ -273,6 +279,9 @@ export default function PodiumTeleport() {
   const chartDataRef = useRef(null);
   const speakerInfoRef = useRef(null);
   const votesRef = useRef({ up: 0, down: 0 });
+  // Throwables — projectiles flying from crowd to speaker
+  const throwablesRef = useRef([]); // { type:"tomato"|"diamond", pos:[x,y,z], vel:[x,y,z], life:0, maxLife:0.8 }
+  const MAX_THROWABLES = 15;
 
   // Thesis modal
   const [showStepUpModal, setShowStepUpModal] = useState(false);
@@ -341,6 +350,35 @@ export default function PodiumTeleport() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
   useEffect(() => { const i = setInterval(() => setLiveCount(p => p + Math.floor(Math.random() * 7) - 3), 4000); return () => clearInterval(i); }, []);
+  // ═══ THROWABLES — spawn projectiles from crowd toward speaker ═══
+  const spawnThrow = useCallback((type, count = 1) => {
+    const throws = throwablesRef.current;
+    const chars = stateRef.current.chars;
+    for (let n = 0; n < count; n++) {
+      if (throws.length >= MAX_THROWABLES) throws.shift(); // evict oldest
+      // Pick a random crowd character as the origin
+      const c = chars[Math.floor(Math.random() * chars.length)];
+      const startX = c.homeX;
+      const startZ = c.homeZ;
+      const startY = 2.5 + Math.random() * 0.5; // head-height of crowd
+      // Target: speaker chest area (center stage + stageY offset)
+      const stageY = stateRef.current.speakerY || 1.2;
+      const targetY = stageY + 1.5 + (Math.random() - 0.5) * 0.6;
+      const targetX = (Math.random() - 0.5) * 0.4;
+      const targetZ = (Math.random() - 0.5) * 0.4;
+      // Ballistic arc: compute velocity for a nice parabola
+      const flightTime = 0.5 + Math.random() * 0.3;
+      const dx = targetX - startX, dy = targetY - startY, dz = targetZ - startZ;
+      const vx = dx / flightTime;
+      const vz = dz / flightTime;
+      const vy = dy / flightTime + 4.9 * flightTime; // compensate for gravity (g=9.8 → half=4.9)
+      throws.push({
+        type, pos: [startX, startY, startZ], vel: [vx, vy, vz],
+        life: 0, maxLife: flightTime,
+      });
+    }
+  }, []);
+
   useEffect(() => {
     if (!speakerInfo) return;
     const i = setInterval(() => {
@@ -348,6 +386,9 @@ export default function PodiumTeleport() {
       const upAdd = u ? Math.ceil(Math.random() * 3) : 0;
       const downAdd = !u ? 1 : 0;
       setVotes(p => ({ up: p.up + upAdd, down: p.down + downAdd }));
+      // Spawn throwables from simulated crowd votes
+      if (upAdd > 0) spawnThrow("diamond", 1);
+      if (downAdd > 0) spawnThrow("tomato", 1);
       // Track vote rate for reaction bursts
       const rt = reactionTimerRef.current;
       rt.count += upAdd + downAdd;
@@ -366,7 +407,7 @@ export default function PodiumTeleport() {
       }
     }, 900);
     return () => clearInterval(i);
-  }, [speakerInfo]);
+  }, [speakerInfo, spawnThrow]);
 
   // Sync refs for jumbotron (animate loop reads these)
   useEffect(() => { chartDataRef.current = chartData; }, [chartData]);
@@ -536,6 +577,8 @@ export default function PodiumTeleport() {
     if (!mountRef.current) return;
     const container = mountRef.current;
     function init() {
+      const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+      const isIPhone = /iPhone/i.test(navigator.userAgent);
       const w = container.clientWidth, h = container.clientHeight;
       const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
       renderer.setSize(w, h); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -573,11 +616,11 @@ export default function PodiumTeleport() {
             vec2 p=vec2(th*2.0,ph*3.0);
 
             // Triple-layer domain warping — deep organic complexity
-            float w1=domainWarp(p*0.35,t*0.7,5);
-            float w2=domainWarp(p*0.65+vec2(3.3,7.7),t*0.55,4);
-            float w3=domainWarp(p*1.1+vec2(11.1,4.4),t*0.9,3);
-            float w4=domainWarp(p*0.2+vec2(7.7,13.3),t*0.3,4);
-            float comp=(w1*0.35+w2*0.30+w3*0.20+w4*0.15)*0.5+0.5;
+            float w1=domainWarp(p*0.35,t*0.7,${isMobile ? 3 : 5});
+            float w2=domainWarp(p*0.65+vec2(3.3,7.7),t*0.55,${isMobile ? 2 : 4});
+            ${isMobile ? '' : 'float w3=domainWarp(p*1.1+vec2(11.1,4.4),t*0.9,3);'}
+            float w4=domainWarp(p*0.2+vec2(7.7,13.3),t*0.3,${isMobile ? 2 : 4});
+            float comp=(w1*0.35+w2*0.30+${isMobile ? '' : 'w3*0.20+'}w4*0.15)*0.5+0.5;
 
             // ═══ NEON ANADOL PALETTE — BRIGHT hot pink / electric cyan / lime ═══
             // palA: Hot neon pink (primary — BRIGHT, not muddy)
@@ -609,7 +652,7 @@ export default function PodiumTeleport() {
             col+=vec3(0.0,0.85,1.0)*edgeGl*0.10;
 
             // ═══ BLOOM — generous neon peaks ═══
-            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,3)*0.5+0.5),3.0);
+            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,${isMobile ? 2 : 3})*0.5+0.5),3.0);
             col+=vec3(1.0,0.15,0.55)*hs*0.40;
             float hs2=pow(max(0.0,(1.0-comp)*w2*0.5+0.3),2.5);
             col+=vec3(0.1,0.75,1.0)*hs2*0.12;
@@ -655,7 +698,7 @@ export default function PodiumTeleport() {
             gl_FragColor=vec4(f,1.0);
           }`,
       });
-      scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 32), domeMat));
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, isMobile ? 24 : 32, isMobile ? 24 : 32), domeMat));
 
       // ═══ ANADOL FLOOR — synced with dome hue ═══
       const floorMat = new THREE.ShaderMaterial({
@@ -663,7 +706,7 @@ export default function PodiumTeleport() {
         vertexShader: `varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
         fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vP;${ANADOL_GLSL}
           void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;vec2 p=vP.xz*0.06;
-          float w1=domainWarp(p*0.5,t*0.6,3);float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,3);
+          float w1=domainWarp(p*0.5,t*0.6,${isMobile ? 2 : 3});float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,${isMobile ? 2 : 3});
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
           // Neon Anadol floor — BRIGHT pink/cyan/lime matching dome
           vec3 c=cosPal(s+ah,vec3(0.35,0.06,0.28),vec3(0.50,0.10,0.40),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
@@ -699,14 +742,14 @@ export default function PodiumTeleport() {
           void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
           float a=atan(vW.x,vW.z);float h=vW.y;
           vec2 p=vec2(a*4.0,h*3.0);
-          float w1=domainWarp(p*1.0,t*1.0,4);float w2=domainWarp(p*1.5+vec2(2.0,5.0),t*0.7,3);
+          float w1=domainWarp(p*1.0,t*1.0,${isMobile ? 2 : 4});float w2=domainWarp(p*1.5+vec2(2.0,5.0),t*0.7,${isMobile ? 2 : 3});
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
           // Neon Anadol podium — hottest version of the palette (stage is the focal point)
           vec3 c=cosPal(s+ah,vec3(0.12,0.01,0.10),vec3(0.85,0.12,0.55),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
           vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.01,0.08,0.16),vec3(0.10,0.65,0.70),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
           c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
           // Neon lime tendrils on podium surface
-          float limePod=pow(max(0.0,domainWarp(p*2.0+vec2(4.0,6.0),t*0.8,3)*0.5+0.5),3.0);
+          float limePod=pow(max(0.0,domainWarp(p*2.0+vec2(4.0,6.0),t*0.8,${isMobile ? 2 : 3})*0.5+0.5),3.0);
           c+=vec3(0.12,0.85,0.06)*limePod*0.18;
           // Bright top surface — neon glow platform
           float topGlow=smoothstep(1.0,1.22,h)*1.5;
@@ -726,6 +769,33 @@ export default function PodiumTeleport() {
       podiumMesh.position.y = 0.6; scene.add(podiumMesh);
       podiumMesh.matrixAutoUpdate = false;
       podiumMesh.updateMatrix();
+
+      // ═══ MICROPHONE STAND — loaded from GLB, positioned in front of caller ═══
+      let micGroup = null;
+      new GLTFLoader().load("/3d/microphone.glb", (gltf) => {
+        micGroup = gltf.scene;
+        // Boost materials so they're visible under dark stage lighting
+        micGroup.traverse(child => {
+          if (child.isMesh && child.material) {
+            const m = child.material;
+            // Use the base color texture as emissive so it self-illuminates
+            if (m.map) {
+              m.emissiveMap = m.map;
+              m.emissive = new THREE.Color(1, 1, 1);
+              m.emissiveIntensity = 0.6;
+            }
+            m.metalness = 0.3;
+            m.roughness = 0.5;
+            m.needsUpdate = true;
+          }
+        });
+        const st = stateRef.current;
+        micGroup.scale.setScalar(st.micScale);
+        micGroup.position.set(0, st.micY, st.micZ);
+        scene.add(micGroup);
+        threeRef.current.micGroup = micGroup;
+      });
+
       // ═══ ANADOL RINGS — glowing shader torus rings ═══
       const ringShader = new THREE.ShaderMaterial({
         uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
@@ -960,7 +1030,7 @@ export default function PodiumTeleport() {
       scene.add(tpParts);
 
       // Ambient particles
-      const PC = 600;
+      const PC = isMobile ? 300 : 600;
       const ppArr = new Float32Array(PC * 3); const ppLife = new Float32Array(PC);
       for (let i = 0; i < PC; i++) {
         const a = Math.random() * Math.PI * 2, r = 1 + Math.random() * ROOM_RADIUS * 0.8;
@@ -1192,6 +1262,19 @@ export default function PodiumTeleport() {
             }`,
         });
       };
+      // ═══ THROWABLES — instanced spheres for tomatoes & diamonds ═══
+      const throwGeo = new THREE.SphereGeometry(0.12, 6, 6);
+      const tomatoMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+      const diamondMat = new THREE.MeshBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
+      const tomatoMeshes = new THREE.InstancedMesh(throwGeo, tomatoMat, MAX_THROWABLES);
+      const diamondMeshes = new THREE.InstancedMesh(throwGeo, diamondMat, MAX_THROWABLES);
+      tomatoMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      diamondMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      // Start all instances hidden (scale 0)
+      const zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
+      for (let i = 0; i < MAX_THROWABLES; i++) { tomatoMeshes.setMatrixAt(i, zeroMat); diamondMeshes.setMatrixAt(i, zeroMat); }
+      scene.add(tomatoMeshes); scene.add(diamondMeshes);
+
       const sg = new THREE.Group(); sg.visible = false; sg.position.set(0, 1.2, 0);
       // Head — BIG sphere with PFP mapped via matcap (Nintendo: head = 40% of character)
       // Billboard: always faces camera. Matcap projection gives natural 3D curvature.
@@ -1264,22 +1347,52 @@ export default function PodiumTeleport() {
       slr.position.set(0.18, 0.6, 0); sg.add(slr);
       scene.add(sg);
 
+      // ═══ GUITAR — held by speaker, positioned relative to speaker on stage ═══
+      new GLTFLoader().load("/3d/guitar.glb", (gltf) => {
+        const guitar = gltf.scene;
+        // Self-illuminate like the mic
+        guitar.traverse(child => {
+          if (child.isMesh && child.material) {
+            const m = child.material;
+            if (m.map) {
+              m.emissiveMap = m.map;
+              m.emissive = new THREE.Color(1, 1, 1);
+              m.emissiveIntensity = 0.6;
+            }
+            m.metalness = 0.3;
+            m.roughness = 0.5;
+            m.needsUpdate = true;
+          }
+        });
+        guitar.visible = false; // shown only when speaker is active
+        scene.add(guitar);
+        threeRef.current.guitarMesh = guitar;
+      });
+
+      // Reusable vectors for per-frame jumbotron auto-positioning
+      const _pv1 = new THREE.Vector3();
+      const _pv2 = new THREE.Vector3();
+      const JMBO_TOP_LOCAL = 6.225; // top plate top edge in local space
+
       threeRef.current = { scene, camera, renderer, spotPink, warm1, warm2, domeMat, floorMat, wallMat,
         bodies, heads, pfps, aL, aR, lL, lR, sg, sal, sar, sb,
         beam, beamMat, burst, burstMat, tpParts, tpMat, tpPos, tpVel,
         ppArr, ppLife, ppGeo, pp2Arr, pp2Life, pp2Geo,
         bodyMat, armMat, legMat,
-        jmboGroup, jmboFaces, jmboBotFaces, jmboTopFaces,
+        jmboGroup, jmboFaces, jmboBotFaces, jmboTopFaces, tomatoMeshes, diamondMeshes,
         lasers, laserGroup, podiumMat, ringMats };
 
       // ═══ DEBUG GUI — only visible with ?debug in URL ═══
       const showDebug = window.location.search.includes("debug");
       if (showDebug) {
         const gui = new GUI({ title: "Stage Controls" });
-        gui.domElement.style.position = "absolute";
-        gui.domElement.style.top = "40px";
+        gui.domElement.style.position = "fixed";
+        gui.domElement.style.top = "4px";
         gui.domElement.style.right = "4px";
-        gui.domElement.style.zIndex = "100";
+        gui.domElement.style.zIndex = "9999";
+        gui.domElement.style.opacity = "0.85";
+        gui.domElement.style.maxHeight = "95vh";
+        gui.domElement.style.overflowY = "auto";
         const st2 = stateRef.current;
         const guiObj = {
           JmboY: st2.jmboY, JmboScale: st2.jmboScale, JmboSpin: st2.jmboRotSpeed || 0,
@@ -1297,6 +1410,28 @@ export default function PodiumTeleport() {
         const sf = gui.addFolder("Speaker");
         sf.add(guiObj, "SpeakerScale", 1, 3, 0.1).onChange(v => { stateRef.current.speakerScale = v; });
         sf.add(guiObj, "SpeakerY", 0.5, 3, 0.1).onChange(v => { stateRef.current.speakerY = v; });
+        const mf = gui.addFolder("Mic Stand");
+        guiObj.MicScale = st2.micScale || 1.0;
+        guiObj.MicY = st2.micY || 1.2;
+        guiObj.MicZ = st2.micZ || 1.8;
+        mf.add(guiObj, "MicScale", 0.1, 5, 0.05).onChange(v => { stateRef.current.micScale = v; });
+        mf.add(guiObj, "MicY", 0, 5, 0.05).onChange(v => { stateRef.current.micY = v; });
+        mf.add(guiObj, "MicZ", -3, 5, 0.05).onChange(v => { stateRef.current.micZ = v; });
+        const gf = gui.addFolder("Guitar");
+        guiObj.GuitarScale = st2.guitarScale;
+        guiObj.GuitarX = st2.guitarX;
+        guiObj.GuitarY = st2.guitarY;
+        guiObj.GuitarZ = st2.guitarZ;
+        guiObj.GuitarRotX = st2.guitarRotX;
+        guiObj.GuitarRotY = st2.guitarRotY;
+        guiObj.GuitarRotZ = st2.guitarRotZ;
+        gf.add(guiObj, "GuitarScale", 0.1, 5, 0.05).onChange(v => { stateRef.current.guitarScale = v; });
+        gf.add(guiObj, "GuitarX", -3, 3, 0.05).onChange(v => { stateRef.current.guitarX = v; });
+        gf.add(guiObj, "GuitarY", -2, 5, 0.05).onChange(v => { stateRef.current.guitarY = v; });
+        gf.add(guiObj, "GuitarZ", -3, 3, 0.05).onChange(v => { stateRef.current.guitarZ = v; });
+        gf.add(guiObj, "GuitarRotX", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotX = v; });
+        gf.add(guiObj, "GuitarRotY", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotY = v; });
+        gf.add(guiObj, "GuitarRotZ", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotZ = v; });
         const bf = gui.addFolder("Background");
         bf.add(guiObj, "AmbientInt", 0, 5, 0.1).onChange(v => { scene.children.find(c => c.isAmbientLight).intensity = v; });
         bf.add(guiObj, "SpotInt", 0, 8, 0.1).onChange(v => { spotPink.intensity = v; });
@@ -1339,6 +1474,7 @@ export default function PodiumTeleport() {
         camera.position.x = Math.sin(st.cameraAngle) * st.cameraDist;
         camera.position.z = Math.cos(st.cameraAngle) * st.cameraDist;
         camera.position.y = st.cameraHeight; camera.lookAt(0, 3, 0);
+        camera.updateMatrixWorld();
 
         domeMat.uniforms.uTime.value = t;
         domeMat.uniforms.uHueShift.value = st.domeHueShift;
@@ -1374,8 +1510,14 @@ export default function PodiumTeleport() {
         // ═══ 4-SIDED JUMBOTRON — fixed position, optional slow spin ═══
         if (threeRef.current.jmboGroup) {
           const T = threeRef.current;
-          const jY = st.jmboY;
           const jScale = st.jmboScale;
+          // Auto-position: pin jumbotron top plate to viewport top
+          _pv1.set(0, 10, 0).project(camera);
+          _pv2.set(0, 20, 0).project(camera);
+          const ndcPerY = (_pv2.y - _pv1.y) / 10;
+          const topNDC = isIPhone ? 0.78 : 0.95;
+          const topVisY = 10 + (topNDC - _pv1.y) / ndcPerY;
+          const jY = topVisY - JMBO_TOP_LOCAL * jScale;
           T.jmboGroup.position.y = jY;
           T.jmboGroup.scale.setScalar(jScale);
           // Optional slow spin
@@ -1389,9 +1531,61 @@ export default function PodiumTeleport() {
 
           // Count down intro timer
           if (st.jmboIntroTimer > 0) st.jmboIntroTimer -= dt;
+        }
 
-          // ═══ RENDER CANVASES AT 5FPS — dot-product cull back-facing faces ═══
-          if (Math.floor(t * 5) !== Math.floor((t - dt) * 5)) {
+        // ═══ MICROPHONE — orbits with camera, always between caller and audience ═══
+        if (threeRef.current.micGroup) {
+          const mic = threeRef.current.micGroup;
+          mic.scale.setScalar(st.micScale);
+          // Place mic at micZ distance from center, toward the camera
+          const camAngle = Math.atan2(camera.position.x, camera.position.z);
+          mic.position.set(
+            Math.sin(camAngle) * st.micZ,
+            st.micY,
+            Math.cos(camAngle) * st.micZ
+          );
+          // Face camera (Y-axis only)
+          mic.lookAt(camera.position.x, mic.position.y, camera.position.z);
+        }
+
+        // ═══ GUITAR — pinned to speaker's chest, materializes with teleport ═══
+        if (threeRef.current.guitarMesh) {
+          const guitar = threeRef.current.guitarMesh;
+          const isBeamIn = st.teleportPhase === "beam_in" && st.teleportTimer > 0.25;
+          const isActive = st.speaker !== null && st.teleportPhase === "active";
+          guitar.visible = isBeamIn || isActive;
+          if (guitar.visible) {
+            const stageY = st.speakerY || 1.2;
+            const spkScale = st.speakerScale || 1.8;
+            // During beam_in: scale up from 0 matching the speaker's entrance
+            let scaleMul = 1;
+            if (isBeamIn) {
+              scaleMul = Math.min((st.teleportTimer - 0.25) / 0.3, 1);
+              scaleMul = scaleMul * scaleMul * (3 - 2 * scaleMul); // smoothstep
+            }
+            const chestY = stageY + 0.70 * spkScale * scaleMul;
+            // Camera-facing Y rotation (body always faces camera)
+            const fAngle = Math.atan2(camera.position.x, camera.position.z);
+            // Apply Y rotation FIRST via rotation order, then local tilts stay stable
+            guitar.rotation.order = "YXZ";
+            guitar.rotation.set(st.guitarRotX, fAngle + st.guitarRotY, st.guitarRotZ);
+            // Local offsets: X = right, Y = up, Z = forward (toward camera)
+            // Convert local offsets to world space using the facing angle
+            const sinF = Math.sin(fAngle), cosF = Math.cos(fAngle);
+            guitar.position.set(
+              sinF * st.guitarZ + cosF * st.guitarX,
+              chestY + st.guitarY,
+              cosF * st.guitarZ - sinF * st.guitarX
+            );
+            guitar.scale.setScalar(st.guitarScale * scaleMul);
+          }
+        }
+
+        // ═══ RENDER CANVASES AT 5FPS (3FPS mobile) — dot-product cull back-facing faces ═══
+        if (threeRef.current.jmboGroup) {
+          const T = threeRef.current;
+          const jmboFPS = isMobile ? 3 : 5;
+          if (Math.floor(t * jmboFPS) !== Math.floor((t - dt) * jmboFPS)) {
             const cd = chartDataRef.current;
             const si = speakerInfoRef.current;
             const vt = votesRef.current || { up: 0, down: 0 };
@@ -2225,10 +2419,13 @@ export default function PodiumTeleport() {
         const zAxis = new THREE.Vector3(0, 0, 1);
         const xAxis = new THREE.Vector3(1, 0, 0);
         const idQ = new THREE.Quaternion();
+        const yAxis = new THREE.Vector3(0, 1, 0);
         // Pre-compute camera-facing quaternion for head billboarding
         const camDir = new THREE.Vector3();
         const headLookQ = new THREE.Quaternion();
         const headLookMat = new THREE.Matrix4();
+        const bodyFaceQ = new THREE.Quaternion();
+        const bodyArmQ = new THREE.Quaternion();
         const _origin = new THREE.Vector3(0, 0, 0);
         const _up = new THREE.Vector3(0, 1, 0);
         const _headWorld = new THREE.Vector3();
@@ -2307,10 +2504,17 @@ export default function PodiumTeleport() {
           const pScale = isOnStage ? sv : 1;
           const stageY = isOnStage ? (st.speakerY || 1.2) : 0;
 
-          // ── Torso
+          // ── Torso (speaker faces camera, crowd stays neutral)
           sc.set(squish * sv, stretch * jumpStr * sv, squish * sv);
           pos.set(cx, (0.70 + bob + jumpH) * pScale + stageY, cz);
-          dm.compose(pos, idQ, sc); bodies.setMatrixAt(i, dm);
+          if (isOnStage) {
+            const faceAngle = Math.atan2(camera.position.x - cx, camera.position.z - cz);
+            bodyFaceQ.setFromAxisAngle(yAxis, faceAngle);
+            dm.compose(pos, bodyFaceQ, sc);
+          } else {
+            dm.compose(pos, idQ, sc);
+          }
+          bodies.setMatrixAt(i, dm);
 
           // ── Head — billboard toward camera + gentle tilt
           sc.set(sv, sv, sv);
@@ -2331,28 +2535,93 @@ export default function PodiumTeleport() {
             stateRef.current._speakerHeadZ = pos.z;
           }
 
-          // ── Arms
+          // ── Arms (speaker: rotate with body facing camera)
           sc.set(squish * sv, stretch * sv, squish * sv);
-          pos.set(cx - 0.20 * pScale, (0.85 + bob + jumpH) * pScale + stageY, cz);
-          q.setFromAxisAngle(zAxis, armL);
-          dm.compose(pos, q, sc); aL.setMatrixAt(i, dm);
-          pos.set(cx + 0.20 * pScale, (0.85 + bob + jumpH) * pScale + stageY, cz);
-          q.setFromAxisAngle(zAxis, armR);
-          dm.compose(pos, q, sc); aR.setMatrixAt(i, dm);
+          if (isOnStage) {
+            const fAngle = Math.atan2(camera.position.x - cx, camera.position.z - cz);
+            // Left arm — offset to the left of the camera-facing direction
+            const sinF = Math.sin(fAngle), cosF = Math.cos(fAngle);
+            const armDist = 0.20 * pScale;
+            pos.set(cx + cosF * armDist, (0.85 + bob) * pScale + stageY, cz - sinF * armDist);
+            bodyArmQ.setFromAxisAngle(yAxis, fAngle);
+            q.setFromAxisAngle(zAxis, armL);
+            bodyArmQ.multiply(q);
+            dm.compose(pos, bodyArmQ, sc); aL.setMatrixAt(i, dm);
+            // Right arm
+            pos.set(cx - cosF * armDist, (0.85 + bob) * pScale + stageY, cz + sinF * armDist);
+            bodyArmQ.setFromAxisAngle(yAxis, fAngle);
+            q.setFromAxisAngle(zAxis, armR);
+            bodyArmQ.multiply(q);
+            dm.compose(pos, bodyArmQ, sc); aR.setMatrixAt(i, dm);
+          } else {
+            pos.set(cx - 0.20 * pScale, (0.85 + bob + jumpH) * pScale + stageY, cz);
+            q.setFromAxisAngle(zAxis, armL);
+            dm.compose(pos, q, sc); aL.setMatrixAt(i, dm);
+            pos.set(cx + 0.20 * pScale, (0.85 + bob + jumpH) * pScale + stageY, cz);
+            q.setFromAxisAngle(zAxis, armR);
+            dm.compose(pos, q, sc); aR.setMatrixAt(i, dm);
+          }
 
-          // ── Legs
+          // ── Legs (speaker: rotate with body facing camera)
           const jLeg = jumping ? 0.4 : 0;
           sc.set(sv, sv * (jumping ? 0.85 : 1), sv);
-          pos.set(cx - 0.07 * pScale, (0.21 + jumpH * 0.3) * pScale + stageY, cz);
-          q.setFromAxisAngle(xAxis, legSwing + jLeg);
-          dm.compose(pos, q, sc); lL.setMatrixAt(i, dm);
-          pos.set(cx + 0.07 * pScale, (0.21 + jumpH * 0.3) * pScale + stageY, cz);
-          q.setFromAxisAngle(xAxis, -legSwing - jLeg);
-          dm.compose(pos, q, sc); lR.setMatrixAt(i, dm);
+          if (isOnStage) {
+            const fAngle = Math.atan2(camera.position.x - cx, camera.position.z - cz);
+            const sinF = Math.sin(fAngle), cosF = Math.cos(fAngle);
+            const legDist = 0.07 * pScale;
+            pos.set(cx + cosF * legDist, (0.21) * pScale + stageY, cz - sinF * legDist);
+            bodyArmQ.setFromAxisAngle(yAxis, fAngle);
+            q.setFromAxisAngle(xAxis, legSwing);
+            bodyArmQ.multiply(q);
+            dm.compose(pos, bodyArmQ, sc); lL.setMatrixAt(i, dm);
+            pos.set(cx - cosF * legDist, (0.21) * pScale + stageY, cz + sinF * legDist);
+            bodyArmQ.setFromAxisAngle(yAxis, fAngle);
+            q.setFromAxisAngle(xAxis, -legSwing);
+            bodyArmQ.multiply(q);
+            dm.compose(pos, bodyArmQ, sc); lR.setMatrixAt(i, dm);
+          } else {
+            pos.set(cx - 0.07 * pScale, (0.21 + jumpH * 0.3) * pScale + stageY, cz);
+            q.setFromAxisAngle(xAxis, legSwing + jLeg);
+            dm.compose(pos, q, sc); lL.setMatrixAt(i, dm);
+            pos.set(cx + 0.07 * pScale, (0.21 + jumpH * 0.3) * pScale + stageY, cz);
+            q.setFromAxisAngle(xAxis, -legSwing - jLeg);
+            dm.compose(pos, q, sc); lR.setMatrixAt(i, dm);
+          }
         }
         bodies.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
         aL.instanceMatrix.needsUpdate = true; aR.instanceMatrix.needsUpdate = true;
         lL.instanceMatrix.needsUpdate = true; lR.instanceMatrix.needsUpdate = true;
+
+        // ═══ THROWABLES — gravity arcs from crowd → speaker ═══
+        if (threeRef.current.tomatoMeshes) {
+          const throws = throwablesRef.current;
+          let tIdx = 0, dIdx = 0;
+          for (let i = throws.length - 1; i >= 0; i--) {
+            const tr = throws[i];
+            tr.life += dt;
+            if (tr.life >= tr.maxLife) { throws.splice(i, 1); continue; }
+            tr.pos[0] += tr.vel[0] * dt;
+            tr.pos[1] += tr.vel[1] * dt;
+            tr.pos[2] += tr.vel[2] * dt;
+            tr.vel[1] -= 9.8 * dt;
+            const lr = tr.life / tr.maxLife;
+            const s = lr < 0.1 ? lr / 0.1 : lr > 0.85 ? (1 - lr) / 0.15 : 1;
+            pos.set(tr.pos[0], tr.pos[1], tr.pos[2]);
+            sc.set(s, s, s);
+            dm.compose(pos, idQ, sc);
+            if (tr.type === "tomato" && tIdx < MAX_THROWABLES) {
+              threeRef.current.tomatoMeshes.setMatrixAt(tIdx++, dm);
+            } else if (tr.type === "diamond" && dIdx < MAX_THROWABLES) {
+              threeRef.current.diamondMeshes.setMatrixAt(dIdx++, dm);
+            }
+          }
+          sc.set(0, 0, 0); dm.compose(pos, idQ, sc);
+          for (let i = tIdx; i < MAX_THROWABLES; i++) threeRef.current.tomatoMeshes.setMatrixAt(i, dm);
+          for (let i = dIdx; i < MAX_THROWABLES; i++) threeRef.current.diamondMeshes.setMatrixAt(i, dm);
+          threeRef.current.tomatoMeshes.instanceMatrix.needsUpdate = true;
+          threeRef.current.diamondMeshes.instanceMatrix.needsUpdate = true;
+        }
+
         renderer.render(scene, camera);
 
         // Project speaker head to screen for speech bubble (throttled to 10fps)
@@ -2457,8 +2726,20 @@ export default function PodiumTeleport() {
     }
   }
 
-  const handleVote = useCallback((d) => { if (userVoted) return; setUserVoted(d); setVotes(p => ({ up: p.up + (d === "up" ? 1 : 0), down: p.down + (d === "down" ? 1 : 0) })); }, [userVoted]);
-  const handleSend = useCallback(() => { if (!chatInput.trim()) return; setChatMessages(p => [...p, { user: "you", msg: chatInput.trim() }]); setChatInput(""); }, [chatInput]);
+  const handleVote = useCallback((d) => {
+    if (userVoted) return;
+    setUserVoted(d);
+    setVotes(p => ({ up: p.up + (d === "up" ? 1 : 0), down: p.down + (d === "down" ? 1 : 0) }));
+    // Your vote launches a burst of 3 throwables
+    spawnThrow(d === "up" ? "diamond" : "tomato", 3);
+  }, [userVoted, spawnThrow]);
+  const handleSend = useCallback(() => {
+    if (!chatInput.trim()) return;
+    setChatMessages(p => [...p, { user: "you", msg: chatInput.trim() }]);
+    setChatInput("");
+    // Keep keyboard open — re-focus input after send
+    setTimeout(() => chatInputRef.current?.focus(), 10);
+  }, [chatInput]);
   const handleBuy = useCallback(() => {
     if (!speakerInfo || !buyAmount) return;
     const amt = parseFloat(buyAmount);
@@ -2584,6 +2865,7 @@ export default function PodiumTeleport() {
         @keyframes announceSub{0%{opacity:0;transform:translateY(12px)}15%{opacity:0;transform:translateY(12px)}25%{opacity:1;transform:translateY(0)}75%{opacity:1;transform:translateY(0)}90%{opacity:0}}
         @keyframes announceGlow{0%{opacity:0;transform:scale(0.5)}15%{opacity:0.6;transform:scale(1)}50%{opacity:0.3;transform:scale(1.2)}100%{opacity:0;transform:scale(1.5)}}
         @keyframes announcePulse{0%,100%{opacity:0.4}50%{opacity:1}}
+        @keyframes chatBubbleUp{0%{opacity:0;transform:translateY(4px)}8%{opacity:1;transform:translateY(0)}75%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
       `}</style>
 
       <div ref={mountRef} style={{ width: "100%", height: "100%", touchAction: "none", cursor: "grab" }} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU} />
@@ -2618,7 +2900,7 @@ export default function PodiumTeleport() {
       {/* ═══ BUY CELEBRATION — floating money emojis ═══ */}
       {floatingEmojis.map(e => (
         <div key={e.id} style={{
-          position: "absolute", left: e.x, bottom: 120, zIndex: 30,
+          position: "absolute", left: e.x, bottom: 70, zIndex: 30,
           fontSize: e.size, pointerEvents: "none",
           animation: `floatUp ${e.speed}s ease-out ${e.delay}s forwards`,
           opacity: 0, animationFillMode: "forwards",
@@ -2659,52 +2941,48 @@ export default function PodiumTeleport() {
         </div>
       )}
 
-      {/* BOTTOM PANEL */}
-      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "linear-gradient(0deg,rgba(8,4,12,0.96) 55%,rgba(8,4,12,0.6) 85%,transparent 100%)", display: "flex", flexDirection: "column" }}>
-        {/* Chat messages */}
-        <div style={{ height: 120, overflowY: "auto", padding: "8px 14px", display: "flex", flexDirection: "column", gap: 3, maskImage: "linear-gradient(to bottom,transparent 0%,black 15%,black 100%)", WebkitMaskImage: "linear-gradient(to bottom,transparent 0%,black 15%,black 100%)", scrollbarWidth: "none", msOverflowStyle: "none", WebkitOverflowScrolling: "touch" }}>
-          {chatMessages.slice(-20).map((m, i) => (
-            <div key={i} style={{ fontFamily: "'Inter'", fontSize: 12, lineHeight: 1.45, animation: "slideIn 0.2s ease", letterSpacing: -0.2 }}>
-              <span style={{ color: m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`, fontWeight: 600, fontSize: 11 }}>{m.user}</span>
-              <span style={{ color: "#333", margin: "0 4px" }}>·</span>
-              <span style={{ color: "#999", fontWeight: 400 }}>{m.msg}</span>
-            </div>
-          ))}
-          <div ref={chatEndRef} />
-        </div>
-        {/* Action buttons */}
-        {(() => {
-          const holdingCurrent = speakerInfo && userPositions.some(p => p.coin === speakerInfo.coin.ticker);
-          const btnBase = { borderRadius: 10, border: "none", fontFamily: "'Inter'", fontWeight: 700, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "10px 0", letterSpacing: -0.2, transition: "all 0.15s ease" };
-          return (
-            <div style={{ display: "flex", gap: 5, padding: "4px 14px 6px" }}>
-              <button onClick={() => handleVote("up")} style={{ ...btnBase, flex: 1, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.06)", color: userVoted === "up" ? "#000" : "#00ff88", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "up" ? 0.3 : 1 }}>
-                <Icon d={Icons.rocket} size={13} color={userVoted === "up" ? "#000" : "#00ff88"} />
-              </button>
-              <button onClick={() => handleVote("down")} style={{ ...btnBase, flex: 1, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.15)"}`, background: userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.06)", color: userVoted === "down" ? "#fff" : "#ff4444", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "down" ? 0.3 : 1 }}>
-                <Icon d={Icons.skull} size={13} color={userVoted === "down" ? "#fff" : "#ff4444"} />
-              </button>
-              {holdingCurrent ? (
-                <>
-                  <button onClick={(e) => { e.stopPropagation(); handleSell(speakerInfo.coin.ticker); }} style={{ ...btnBase, flex: 1, border: "1px solid rgba(255,68,68,0.2)", background: "rgba(255,68,68,0.08)", color: "#ff4444" }}>Sell</button>
-                  <button onClick={(e) => { e.stopPropagation(); setShowBuySheet(true); }} style={{ ...btnBase, flex: 1, background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000" }}>Buy</button>
-                </>
-              ) : (
-                <button onClick={() => speakerInfo && setShowBuySheet(true)} style={{ ...btnBase, flex: 1.5, background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.1)", color: speakerInfo ? "#000" : "#00ff8844", opacity: !speakerInfo ? 0.3 : 1 }}>
-                  <Icon d={Icons.zap} size={13} color={speakerInfo ? "#000" : "#00ff8844"} />Buy
-                </button>
-              )}
-              <button onClick={handleMicTap} style={{ ...btnBase, flex: 1, background: "linear-gradient(135deg,#ff2d78,#ff6622)", color: "#fff" }}>
-                <Icon d={Icons.mic} size={13} color="#fff" />
-              </button>
-            </div>
-          );
-        })()}
-        {/* Chat input */}
-        <div style={{ display: "flex", gap: 6, padding: "0 14px", paddingBottom: "max(12px, env(safe-area-inset-bottom))", borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: 6 }}>
-          <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say something..." style={{ flex: 1, padding: "9px 12px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2 }} />
-          <button onClick={handleSend} style={{ padding: "9px 12px", borderRadius: 10, border: "none", background: "rgba(255,255,255,0.06)", color: "#666", cursor: "pointer", display: "flex", alignItems: "center" }}>
-            <Icon d={Icons.send} size={14} color="#666" />
+      {/* ═══ FLOATING CHAT — Habbo-style bubbles over the scene ═══ */}
+      <div data-ui="1" style={{ position: "absolute", bottom: 56, left: 0, right: 0, zIndex: 9, pointerEvents: "none", padding: "0 14px", display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflow: "hidden", maskImage: "linear-gradient(to bottom,transparent 0%,black 25%,black 100%)", WebkitMaskImage: "linear-gradient(to bottom,transparent 0%,black 25%,black 100%)" }}>
+        {chatMessages.slice(-8).map((m, i, arr) => (
+          <div key={chatMessages.length - 8 + i} style={{
+            fontFamily: "'Inter'", fontSize: 12, lineHeight: 1.4, letterSpacing: -0.2,
+            animation: `chatBubbleUp ${i === arr.length - 1 ? "6s" : "5s"} ease forwards`,
+            opacity: 0,
+          }}>
+            <span style={{ color: m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`, fontWeight: 600, fontSize: 11 }}>{m.user}</span>
+            <span style={{ color: "#444", margin: "0 4px" }}>·</span>
+            <span style={{ color: "#bbb", fontWeight: 400 }}>{m.msg}</span>
+          </div>
+        ))}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* ═══ BOTTOM BAR — Habbo-style: input + actions on one row ═══ */}
+      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "rgba(8,4,12,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderTop: "1px solid rgba(255,255,255,0.06)", paddingBottom: "max(6px, env(safe-area-inset-bottom))" }}>
+        <div style={{ display: "flex", gap: 4, padding: "6px 10px", alignItems: "center" }}>
+          {/* Chat input — Habbo "Say" bar */}
+          <input ref={chatInputRef} value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say..." style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2 }} />
+          {/* Vote buttons */}
+          <button onClick={() => handleVote("up")} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.06)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "up" ? 0.3 : 1, transition: "all 0.15s" }}>
+            <Icon d={Icons.rocket} size={14} color={userVoted === "up" ? "#000" : "#00ff88"} />
+          </button>
+          <button onClick={() => handleVote("down")} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.15)"}`, background: userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.06)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : userVoted && userVoted !== "down" ? 0.3 : 1, transition: "all 0.15s" }}>
+            <Icon d={Icons.skull} size={14} color={userVoted === "down" ? "#fff" : "#ff4444"} />
+          </button>
+          {/* Buy button */}
+          {speakerInfo && userPositions.some(p => p.coin === speakerInfo.coin.ticker) ? (
+            <>
+              <button onClick={(e) => { e.stopPropagation(); handleSell(speakerInfo.coin.ticker); }} style={{ height: 36, padding: "0 10px", borderRadius: 8, border: "1px solid rgba(255,68,68,0.2)", background: "rgba(255,68,68,0.08)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.15s" }}>Sell</button>
+              <button onClick={(e) => { e.stopPropagation(); setShowBuySheet(true); }} style={{ height: 36, padding: "0 12px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.15s" }}>Buy</button>
+            </>
+          ) : (
+            <button onClick={() => speakerInfo && setShowBuySheet(true)} style={{ height: 36, padding: "0 12px", borderRadius: 8, border: "none", background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.1)", color: speakerInfo ? "#000" : "#00ff8844", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, opacity: !speakerInfo ? 0.3 : 1, transition: "all 0.15s" }}>
+              <Icon d={Icons.zap} size={12} color={speakerInfo ? "#000" : "#00ff8844"} />Buy
+            </button>
+          )}
+          {/* Mic button */}
+          <button onClick={handleMicTap} style={{ width: 36, height: 36, borderRadius: 8, border: "none", background: "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.15s" }}>
+            <Icon d={Icons.mic} size={14} color="#fff" />
           </button>
         </div>
       </div>
@@ -2844,7 +3122,7 @@ export default function PodiumTeleport() {
 
       {/* ═══ FLOATING POSITION CARD ═══ */}
       {userPositions.length > 0 && (
-        <div data-ui="1" style={{ position: "absolute", bottom: 210, right: 10, zIndex: 15 }}>
+        <div data-ui="1" style={{ position: "absolute", bottom: 70, right: 10, zIndex: 15 }}>
           {userPositions.slice(-1).map((pos, i) => {
             const pnl = ((pos.current - pos.entry) / pos.entry * 100);
             const pnlColor = pnl >= 0 ? "#00ff88" : "#ff4444";
@@ -2863,7 +3141,7 @@ export default function PodiumTeleport() {
 
       {/* ═══ REACTION BURSTS ═══ */}
       {reactionBursts.map(b => (
-        <div key={b.id} style={{ position: "absolute", bottom: 220, left: `${b.x}%`, zIndex: 20, animation: "floatUp 2s ease-out forwards", pointerEvents: "none" }}>
+        <div key={b.id} style={{ position: "absolute", bottom: 80, left: `${b.x}%`, zIndex: 20, animation: "floatUp 2s ease-out forwards", pointerEvents: "none" }}>
           <Icon d={b.emoji === "🚀" ? Icons.rocket : Icons.skull} size={22} color={b.emoji === "🚀" ? "#00ff88" : "#ff4444"} />
         </div>
       ))}
