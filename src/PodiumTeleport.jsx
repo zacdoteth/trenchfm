@@ -635,10 +635,9 @@ export default function PodiumTeleport() {
           vec3 c=cosPal(s+ah,vec3(0.3,0.2,0.4),vec3(0.4,0.4,0.45),vec3(1.0,0.8,1.0),vec3(ah,0.2+ah,0.5+ah));
           vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.35,0.3),vec3(0.3,0.4,0.35),vec3(0.8,1.0,1.2),vec3(0.1+ah,0.1+ah,0.35+ah));
           c=mix(c,c2,smoothstep(0.4,0.8,w1*0.5+0.5));
-          // Floor pattern bleeds up bottom half, dome pattern fades down top half
-          float floorBleed=smoothstep(6.0,0.0,h)*0.35;
-          float hm=smoothstep(0.0,1.0,h)*smoothstep(12.0,5.0,h);
-          float i=pow(s,1.5)*0.5*hm*(0.9+sin(t*0.4+a)*0.1)+floorBleed;
+          // Full beautiful wall — no floor bleed, just gentle fade at very top/bottom edges
+          float hm=smoothstep(0.0,0.5,h)*smoothstep(12.0,10.0,h);
+          float i=pow(s,1.5)*0.55*hm*(0.9+sin(t*0.4+a)*0.1);
           float gr=snoise(p*12.0+t*0.3)*0.5+0.5;c*=(0.9+gr*0.2);
           gl_FragColor=vec4(vec3(0.02,0.01,0.025)+c*i,0.85);}`,
       });
