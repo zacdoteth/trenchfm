@@ -309,6 +309,7 @@ export default function PodiumTeleport() {
   const [privacyMode, setPrivacyMode] = useState(false);
   // Speaker screen position for 3D speech bubble
   const [speakerScreenPos, setSpeakerScreenPos] = useState(null);
+  const [bubbleExpanded, setBubbleExpanded] = useState(false);
   const [caCopied, setCaCopied] = useState(false);
   const copyCA = useCallback((e) => {
     e.stopPropagation();
@@ -362,7 +363,7 @@ export default function PodiumTeleport() {
 
   // Sync refs for jumbotron (animate loop reads these)
   useEffect(() => { chartDataRef.current = chartData; }, [chartData]);
-  useEffect(() => { speakerInfoRef.current = speakerInfo; }, [speakerInfo]);
+  useEffect(() => { speakerInfoRef.current = speakerInfo; setBubbleExpanded(false); }, [speakerInfo]);
   // Timeframe switch — update chart from stored timeframe data
   useEffect(() => {
     chartTFRef.current = chartTimeframe;
@@ -601,52 +602,74 @@ export default function PodiumTeleport() {
       });
       scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 64, 64), domeMat));
 
-      // ═══ ANADOL FLOOR ═══
+      // ═══ ANADOL FLOOR — synced with dome hue ═══
       const floorMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 } },
+        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
         vertexShader: `varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;varying vec3 vP;${ANADOL_GLSL}
-          void main(){float t=uTime;vec2 p=vP.xz*0.06;
+        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vP;${ANADOL_GLSL}
+          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;vec2 p=vP.xz*0.06;
           float w1=domainWarp(p*0.5,t*0.6,3);float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,3);
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          vec3 pink=vec3(1.0,0.18,0.47);vec3 orange=vec3(1.0,0.45,0.1);vec3 purple=vec3(0.6,0.15,1.0);
-          vec3 magenta=vec3(0.85,0.08,0.52);vec3 cyan=vec3(0.0,0.75,1.0);
-          vec3 c=mix(magenta,pink,smoothstep(0.3,0.7,s));
-          c=mix(c,orange,smoothstep(0.5,0.9,w2*0.5+0.5)*0.5);
-          c=mix(c,purple,smoothstep(0.4,0.8,w1*0.5+0.5)*0.4);
+          vec3 c=cosPal(s+ah,vec3(0.25,0.15,0.3),vec3(0.3,0.35,0.3),vec3(1.0,0.8,1.0),vec3(ah,0.25+ah,0.55+ah));
+          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.3,0.25),vec3(0.25,0.35,0.3),vec3(0.8,1.0,1.2),vec3(0.15+ah,0.1+ah,0.4+ah));
+          c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
           float d=length(vP.xz);float pg=smoothstep(10.0,1.0,d)*0.4;float ef=smoothstep(30.0,12.0,d);
           float r=pow(s,1.5)*0.3+pg;r*=ef;
           float gx=smoothstep(0.03,0.0,abs(fract(vP.x*0.5)-0.5));
           float gz=smoothstep(0.03,0.0,abs(fract(vP.z*0.5)-0.5));
           float g=max(gx,gz)*0.04*ef;
-          vec3 b=vec3(0.03,0.01,0.02);gl_FragColor=vec4(b+c*r+vec3(g*0.5),1.0);}`,
+          vec3 b=vec3(0.02,0.01,0.025);gl_FragColor=vec4(b+c*r+vec3(g*0.5),1.0);}`,
       });
       const fg = new THREE.CircleGeometry(ROOM_RADIUS + 5, 96); fg.rotateX(-Math.PI / 2);
       scene.add(new THREE.Mesh(fg, floorMat));
 
-      // ═══ ANADOL WALLS ═══
+      // ═══ ANADOL WALLS — synced with dome hue ═══
       const wallMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 } }, transparent: true, side: THREE.BackSide,
+        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } }, transparent: true, side: THREE.BackSide,
         vertexShader: `varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;varying vec3 vW;${ANADOL_GLSL}
-          void main(){float t=uTime;float a=atan(vW.x,vW.z);float h=vW.y;vec2 p=vec2(a*2.5,h*0.25);
+        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;${ANADOL_GLSL}
+          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
+          float a=atan(vW.x,vW.z);float h=vW.y;vec2 p=vec2(a*2.5,h*0.25);
           float w1=domainWarp(p*0.6,t*0.7,4);float w2=domainWarp(p*1.0+vec2(4.0,2.0),t*0.5,3);
           float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          vec3 c=mix(vec3(0.6,0.15,1.0),vec3(0.85,0.08,0.52),s);
-          c=mix(c,vec3(1.0,0.18,0.47),smoothstep(0.5,0.9,w1*0.5+0.5));
-          c=mix(c,vec3(1.0,0.45,0.1),pow(max(0.0,w2*0.5+0.5),2.5)*0.4);
-          float hm=smoothstep(0.0,2.0,h)*smoothstep(12.0,4.0,h);
-          float i=pow(s,1.5)*0.5*hm*(0.9+sin(t*0.4+a)*0.1);
+          vec3 c=cosPal(s+ah,vec3(0.3,0.2,0.4),vec3(0.4,0.4,0.45),vec3(1.0,0.8,1.0),vec3(ah,0.2+ah,0.5+ah));
+          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.35,0.3),vec3(0.3,0.4,0.35),vec3(0.8,1.0,1.2),vec3(0.1+ah,0.1+ah,0.35+ah));
+          c=mix(c,c2,smoothstep(0.4,0.8,w1*0.5+0.5));
+          // Floor pattern bleeds up bottom half, dome pattern fades down top half
+          float floorBleed=smoothstep(6.0,0.0,h)*0.35;
+          float hm=smoothstep(0.0,1.0,h)*smoothstep(12.0,5.0,h);
+          float i=pow(s,1.5)*0.5*hm*(0.9+sin(t*0.4+a)*0.1)+floorBleed;
           float gr=snoise(p*12.0+t*0.3)*0.5+0.5;c*=(0.9+gr*0.2);
-          gl_FragColor=vec4(vec3(0.04,0.01,0.03)+c*i,0.85);}`,
+          gl_FragColor=vec4(vec3(0.02,0.01,0.025)+c*i,0.85);}`,
       });
       const wg = new THREE.CylinderGeometry(ROOM_RADIUS + 1, ROOM_RADIUS + 1, 12, 64, 1, true);
       const wm = new THREE.Mesh(wg, wallMat); wm.position.y = 6; scene.add(wm);
 
-      // Podium — color syncs with dome hue
-      const podiumMat = new THREE.MeshStandardMaterial({ color: 0x15102a, emissive: 0xff2d78, emissiveIntensity: 0.15, roughness: 0.15, metalness: 0.85 });
+      // Podium — GLSL Anadol shader synced with dome hue
+      const podiumMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
+        vertexShader: `varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;${ANADOL_GLSL}
+          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
+          float a=atan(vW.x,vW.z);float h=vW.y;
+          vec2 p=vec2(a*3.0,h*2.0);
+          float w1=domainWarp(p*0.8,t*0.8,4);float w2=domainWarp(p*1.2+vec2(2.0,5.0),t*0.6,3);
+          float s=(w1*0.6+w2*0.4)*0.5+0.5;
+          vec3 c=cosPal(s+ah,vec3(0.3,0.2,0.4),vec3(0.4,0.4,0.45),vec3(1.0,0.8,1.0),vec3(ah,0.2+ah,0.5+ah));
+          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.15,0.35,0.3),vec3(0.3,0.4,0.35),vec3(0.8,1.0,1.2),vec3(0.1+ah,0.1+ah,0.35+ah));
+          c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
+          // Bright rim at top edge
+          float rim=smoothstep(1.0,1.2,h)*0.6;
+          float i=pow(s,1.5)*0.55+rim;
+          float gr=snoise(p*10.0+t*0.4)*0.5+0.5;c*=(0.9+gr*0.2);
+          // Emissive glow bloom
+          vec3 bloom=cosPal(ah*2.0,vec3(0.2,0.5,0.4),vec3(0.3,0.3,0.3),vec3(1.0,1.0,1.0),vec3(0.0,0.33,0.67));
+          vec3 f=vec3(0.02,0.01,0.02)+c*i+bloom*0.08;
+          gl_FragColor=vec4(f,1.0);}`,
+      });
       const podiumMesh = new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 48), podiumMat);
       podiumMesh.position.y = 0.6; scene.add(podiumMesh);
+      // Rings — will be color-synced in animate loop
       const ringMats = [];
       [PODIUM_RADIUS + 0.15, PODIUM_RADIUS - 0.6].forEach((r, i) => {
         const mat = new THREE.MeshBasicMaterial({ color: i === 0 ? 0xff2d78 : 0xb24dff });
@@ -1228,17 +1251,24 @@ export default function PodiumTeleport() {
         domeMat.uniforms.uIntensity.value = st.domeIntensity;
         domeMat.uniforms.uBottomHalf.value = st.domeBottomHalf ? 1.0 : 0.0;
         floorMat.uniforms.uTime.value = t;
+        floorMat.uniforms.uHue.value = st.domeHueShift;
+        floorMat.uniforms.uSpd.value = st.domeSpeed;
         wallMat.uniforms.uTime.value = t;
-        // Podium color syncs with dome hue — immersive Refik feel
+        wallMat.uniforms.uHue.value = st.domeHueShift;
+        wallMat.uniforms.uSpd.value = st.domeSpeed;
+        // Podium GLSL shader syncs with dome
+        if (threeRef.current.podiumMat && threeRef.current.podiumMat.uniforms) {
+          threeRef.current.podiumMat.uniforms.uTime.value = t;
+          threeRef.current.podiumMat.uniforms.uHue.value = st.domeHueShift;
+          threeRef.current.podiumMat.uniforms.uSpd.value = st.domeSpeed;
+        }
+        // Rings sync with dome hue
         const autoHueCPU = (st.domeHueShift + t * st.domeSpeed * 0.0083) % 1;
         const hueAngle = autoHueCPU * Math.PI * 2;
-        const podEmR = 0.6 + 0.4 * Math.cos(hueAngle);
-        const podEmG = 0.2 + 0.3 * Math.cos(hueAngle + 2.094);
-        const podEmB = 0.5 + 0.4 * Math.cos(hueAngle + 4.189);
-        if (threeRef.current.podiumMat) threeRef.current.podiumMat.emissive.setRGB(podEmR, podEmG, podEmB);
         if (threeRef.current.ringMats) {
-          threeRef.current.ringMats[0].color.setRGB(podEmR, podEmG, podEmB);
-          threeRef.current.ringMats[1].color.setRGB(podEmB, podEmR * 0.5, podEmR);
+          const rR = 0.4 + 0.4 * Math.cos(hueAngle), rG = 0.6 + 0.3 * Math.cos(hueAngle + 2.094), rB = 0.5 + 0.4 * Math.cos(hueAngle + 4.189);
+          threeRef.current.ringMats[0].color.setRGB(rR, rG, rB);
+          threeRef.current.ringMats[1].color.setRGB(rB, rR * 0.6, rG);
         }
         // Toon shader time for emissive pulse
         if (threeRef.current.bodyMat) threeRef.current.bodyMat.uniforms.uTime.value = t;
@@ -1520,10 +1550,10 @@ export default function PodiumTeleport() {
 
               if (si) {
                 const pad = 20;
-                // ── ROW 1: PFP circle + $TICKER + "by" + caller name + @followers ──
-                const row1Y = H * 0.32;
-                const pfpSize = 52;
-                // Draw PFP circle
+                const fSz = 56; // unified font size for both rows
+                // ── ROW 1: PFP + $TICKER + %change + "by" + caller @followers ──
+                const row1Y = H * 0.34;
+                const pfpSize = 54;
                 const pfpImg = pfpImgsRef.current[st.jmboIntroCharIdx >= 0 ? st.jmboIntroCharIdx % pfpImgsRef.current.length : 0];
                 let lx = pad;
                 if (pfpImg && pfpImg.naturalWidth) {
@@ -1531,57 +1561,53 @@ export default function PodiumTeleport() {
                   jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 3, pfpSize / 2, 0, Math.PI * 2); jx.clip();
                   jx.drawImage(pfpImg, lx, row1Y - pfpSize / 3 - pfpSize / 2, pfpSize, pfpSize);
                   jx.restore();
-                  // Glow ring
                   jx.strokeStyle = "#ff2d78"; jx.lineWidth = 2;
                   jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 3, pfpSize / 2 + 2, 0, Math.PI * 2); jx.stroke();
                   lx += pfpSize + 14;
                 }
                 // $TICKER
-                jx.font = "bold 56px 'Inter', sans-serif";
+                jx.font = `bold ${fSz}px 'Inter', sans-serif`;
                 jx.fillStyle = "#fff"; jx.textAlign = "left";
                 jx.fillText(si.coin.ticker, lx, row1Y);
-                lx += jx.measureText(si.coin.ticker).width + 14;
+                lx += jx.measureText(si.coin.ticker).width + 12;
+                // % change right next to ticker
+                const chgTxt = si.coin.change;
+                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
+                jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
+                jx.shadowColor = si.coin.positive ? "#00ff88" : "#ff4444";
+                jx.shadowBlur = 10;
+                jx.fillText(chgTxt, lx, row1Y);
+                jx.shadowBlur = 0;
+                lx += jx.measureText(chgTxt).width + 16;
                 // "by"
-                jx.font = "500 32px 'Inter', sans-serif";
-                jx.fillStyle = "#666";
+                jx.font = `500 ${fSz * 0.55 | 0}px 'Inter', sans-serif`;
+                jx.fillStyle = "#555";
                 jx.fillText("by", lx, row1Y);
                 lx += jx.measureText("by").width + 10;
                 // Caller name
-                jx.font = "bold 56px 'Inter', sans-serif";
+                jx.font = `bold ${fSz}px 'Inter', sans-serif`;
                 jx.fillStyle = "#ff2d78";
                 jx.fillText(si.name, lx, row1Y);
-                lx += jx.measureText(si.name).width + 12;
+                lx += jx.measureText(si.name).width + 10;
                 // @followers
-                jx.font = "500 28px 'JetBrains Mono', monospace";
+                jx.font = `500 ${fSz * 0.5 | 0}px 'JetBrains Mono', monospace`;
                 jx.fillStyle = "#555";
                 jx.fillText("@" + (si.followers || "?"), lx, row1Y);
 
-                // ── CHANGE % — BIG, right side, spans both rows ──
-                jx.font = "bold 64px 'JetBrains Mono', monospace";
-                jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
-                jx.textAlign = "right";
-                jx.shadowColor = si.coin.positive ? "#00ff88" : "#ff4444";
-                jx.shadowBlur = 12;
-                jx.fillText((si.coin.positive ? "+" : "") + si.coin.change, W - pad, H * 0.52);
-                jx.shadowBlur = 0;
-                jx.textAlign = "left";
-
-                // ── ROW 2: MC · Price · Liquidity · Supply (bigger text) ──
-                const row2Y = H * 0.82;
+                // ── ROW 2: MC · Price · Liquidity · Supply (same size as row 1) ──
+                const row2Y = H * 0.80;
                 let sx = pad;
-                const stat = (label, val, color) => {
-                  jx.font = "600 24px 'Inter', sans-serif";
-                  jx.fillStyle = "#666";
-                  jx.fillText(label, sx, row2Y - 18);
-                  jx.font = "bold 36px 'JetBrains Mono', monospace";
+                const stat = (val, color) => {
+                  jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
                   jx.fillStyle = color || "#fff";
-                  jx.fillText(val, sx, row2Y + 16);
-                  sx += Math.max(jx.measureText(val).width, jx.measureText(label).width) + 32;
+                  jx.textAlign = "left";
+                  jx.fillText(val, sx, row2Y);
+                  sx += jx.measureText(val).width + 20;
                 };
-                stat("MC", si.coin.mcap, "#fff");
-                stat("Price", "$" + si.coin.price, "#fff");
-                stat("Liquidity", si.coin.liq || "—", "#00d4ff");
-                stat("Supply", si.coin.supply || "1B", "#999");
+                stat(si.coin.mcap, "#fff");
+                stat("$" + si.coin.price, "#ccc");
+                stat(si.coin.liq || "—", "#00d4ff");
+                stat(si.coin.supply || "1B", "#777");
               } else {
                 jx.font = "bold 60px 'Inter', sans-serif";
                 jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
@@ -2281,49 +2307,48 @@ export default function PodiumTeleport() {
         }}>{e.emoji}</div>
       ))}
 
-      {/* ═══ SPEECH BUBBLE — compact thesis above speaker ═══ */}
+      {/* ═══ SPEECH BUBBLE — thesis above speaker, tap to expand ═══ */}
       {speakerInfo?.thesis && speakerScreenPos && (
-        <div data-ui="1" style={{
+        <div data-ui="1" onClick={() => setBubbleExpanded(e => !e)} style={{
           position: "absolute",
-          left: Math.max(10, Math.min(speakerScreenPos.x - 95, window.innerWidth - 200)),
-          top: Math.max(50, speakerScreenPos.y - 60),
-          width: 190,
+          left: Math.max(10, Math.min(speakerScreenPos.x - 140, window.innerWidth - 290)),
+          top: Math.max(50, speakerScreenPos.y - (bubbleExpanded ? 90 : 60)),
+          width: 280,
           zIndex: 8,
-          pointerEvents: "none",
+          pointerEvents: "auto",
+          cursor: "pointer",
           animation: "slideIn 0.3s ease",
+          transition: "top 0.2s ease",
         }}>
           <div style={{
-            background: "rgba(12,6,16,0.85)",
-            backdropFilter: "blur(12px)",
-            WebkitBackdropFilter: "blur(12px)",
-            borderRadius: 10,
-            padding: "6px 9px",
-            border: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+            background: "rgba(12,6,16,0.88)",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            borderRadius: 12,
+            padding: "10px 14px",
+            border: "1px solid rgba(255,255,255,0.12)",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
           }}>
             <div style={{
               fontFamily: "'Inter'",
-              fontSize: 10,
+              fontSize: 14,
               fontWeight: 500,
-              color: "#ddd",
-              lineHeight: 1.45,
+              color: "#eee",
+              lineHeight: 1.5,
               letterSpacing: -0.2,
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
+              ...(bubbleExpanded ? {} : { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }),
             }}>
-              "{speakerInfo.thesis.length > 90 ? speakerInfo.thesis.slice(0, 90) + "..." : speakerInfo.thesis}"
+              "{bubbleExpanded ? speakerInfo.thesis : speakerInfo.thesis}"
             </div>
-            <div style={{ fontFamily: "'Inter'", fontSize: 8, fontWeight: 600, color: "#ff2d78", marginTop: 2, textAlign: "right" }}>
+            <div style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 600, color: "#ff2d78", marginTop: 4, textAlign: "right" }}>
               — {speakerInfo.name}
             </div>
           </div>
           <div style={{
             width: 0, height: 0,
-            borderLeft: "6px solid transparent",
-            borderRight: "6px solid transparent",
-            borderTop: "8px solid rgba(12,6,16,0.85)",
+            borderLeft: "7px solid transparent",
+            borderRight: "7px solid transparent",
+            borderTop: "9px solid rgba(12,6,16,0.88)",
             margin: "-1px auto 0",
           }} />
         </div>
