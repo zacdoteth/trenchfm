@@ -543,7 +543,7 @@ export default function PodiumTeleport() {
       container.appendChild(renderer.domElement); rendererRef.current = renderer;
 
       const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(50, w / h, 0.5, 120);
+      const camera = new THREE.PerspectiveCamera(50, w / h, 0.5, 80);
 
       // Lighting
       scene.add(new THREE.AmbientLight(0x553366, 1.5));
@@ -655,7 +655,7 @@ export default function PodiumTeleport() {
             gl_FragColor=vec4(f,1.0);
           }`,
       });
-      scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 64, 64), domeMat));
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 32), domeMat));
 
       // ═══ ANADOL FLOOR — synced with dome hue ═══
       const floorMat = new THREE.ShaderMaterial({
@@ -684,7 +684,7 @@ export default function PodiumTeleport() {
           float flBr=0.92+sin(uTime*uSpd*0.55)*0.08;
           vec3 b=vec3(0.02,0.008,0.035);gl_FragColor=vec4(b+c*r*flBr+gridCol,1.0);}`,
       });
-      const fg = new THREE.CircleGeometry(ROOM_RADIUS + 5, 96); fg.rotateX(-Math.PI / 2);
+      const fg = new THREE.CircleGeometry(ROOM_RADIUS + 5, 48); fg.rotateX(-Math.PI / 2);
       scene.add(new THREE.Mesh(fg, floorMat));
 
       // Walls removed — dome sphere covers everything beautifully
@@ -722,8 +722,10 @@ export default function PodiumTeleport() {
           vec3 f=vec3(0.01,0.004,0.02)+c*i*podBr+bloom*topGlow*0.35+cyanEdge;
           gl_FragColor=vec4(f,1.0);}`,
       });
-      const podiumMesh = new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 48), podiumMat);
+      const podiumMesh = new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 24), podiumMat);
       podiumMesh.position.y = 0.6; scene.add(podiumMesh);
+      podiumMesh.matrixAutoUpdate = false;
+      podiumMesh.updateMatrix();
       // ═══ ANADOL RINGS — glowing shader torus rings ═══
       const ringShader = new THREE.ShaderMaterial({
         uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
@@ -747,8 +749,10 @@ export default function PodiumTeleport() {
       const ringShader2 = ringShader.clone();
       const ringMats = [ringShader, ringShader2];
       [PODIUM_RADIUS + 0.2, PODIUM_RADIUS + 0.8].forEach((r, i) => {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.04, 8, 96), ringMats[i]);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.04, 6, 48), ringMats[i]);
         ring.rotation.x = -Math.PI / 2; ring.position.y = 1.22; scene.add(ring);
+        ring.matrixAutoUpdate = false;
+        ring.updateMatrix();
       });
 
       // ═══ 4-SIDED JUMBOTRON — stadium scoreboard, fixed in space ═══
@@ -759,7 +763,7 @@ export default function PodiumTeleport() {
         const ctx = canvas.getContext("2d");
         const tex = new THREE.CanvasTexture(canvas);
         tex.minFilter = THREE.LinearFilter;
-        const geo = new THREE.PlaneGeometry(geoW, geoH, 32, 1);
+        const geo = new THREE.PlaneGeometry(geoW, geoH, 16, 1);
         // Concave curve
         const positions = geo.attributes.position;
         for (let i = 0; i < positions.count; i++) {
@@ -873,26 +877,32 @@ export default function PodiumTeleport() {
       // Top/bottom plates
       const topPlate = new THREE.Mesh(new THREE.BoxGeometry(plateSize, 0.25, plateSize), frameMat);
       topPlate.position.y = topY + topH / 2 + 0.15;
+      topPlate.matrixAutoUpdate = false; topPlate.updateMatrix();
       jmboGroup.add(topPlate);
       const midTopPlate = new THREE.Mesh(new THREE.BoxGeometry(plateSize - 0.5, 0.15, plateSize - 0.5), frameMat);
       midTopPlate.position.y = mainY + mainH / 2 + 0.075;
+      midTopPlate.matrixAutoUpdate = false; midTopPlate.updateMatrix();
       jmboGroup.add(midTopPlate);
       const midBotPlate = new THREE.Mesh(new THREE.BoxGeometry(plateSize - 0.5, 0.15, plateSize - 0.5), frameMat);
       midBotPlate.position.y = mainY - mainH / 2 - 0.075;
+      midBotPlate.matrixAutoUpdate = false; midBotPlate.updateMatrix();
       jmboGroup.add(midBotPlate);
       const bottomPlate = new THREE.Mesh(new THREE.BoxGeometry(plateSize, 0.25, plateSize), frameMat);
       bottomPlate.position.y = botY - botH / 2 - 0.15;
+      bottomPlate.matrixAutoUpdate = false; bottomPlate.updateMatrix();
       jmboGroup.add(bottomPlate);
       // Corner pillars — square corners
       const cp = halfD + 0.3;
       [[-cp, cp], [cp, cp], [-cp, -cp], [cp, -cp]].forEach(([px, pz]) => {
         const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.25, totalH + 0.5, 0.25), frameMat);
         pillar.position.set(px, (topY + topH / 2 + botY - botH / 2) / 2, pz);
+        pillar.matrixAutoUpdate = false; pillar.updateMatrix();
         jmboGroup.add(pillar);
       });
       // Mounting pole
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 5, 8), frameMat);
       pole.position.y = topY + topH / 2 + 2.8;
+      pole.matrixAutoUpdate = false; pole.updateMatrix();
       jmboGroup.add(pole);
 
       jmboGroup.position.set(0, stateRef.current.jmboY, 0);
@@ -975,13 +985,13 @@ export default function PodiumTeleport() {
       const laserGroup = new THREE.Group();
       const laserColors = [0xff1a6e, 0x39ff14, 0x00d4ff, 0xff1a6e, 0x39ff14, 0x00d4ff];
       const lasers = [];
+      const laserGeo = new THREE.CylinderGeometry(0.02, 0.02, 30, 4);
       for (let i = 0; i < LASER_COUNT; i++) {
-        const geo = new THREE.CylinderGeometry(0.02, 0.02, 30, 4);
         const mat = new THREE.MeshBasicMaterial({
           color: laserColors[i], transparent: true, opacity: 0.15,
           blending: THREE.AdditiveBlending, depthWrite: false,
         });
-        const beam = new THREE.Mesh(geo, mat);
+        const beam = new THREE.Mesh(laserGeo, mat);
         beam.position.set((i - LASER_COUNT / 2 + 0.5) * 2.5, 2, 0);
         lasers.push({ mesh: beam, speed: 0.3 + Math.random() * 0.5, phase: i * 1.1 });
         laserGroup.add(beam);
@@ -1187,7 +1197,7 @@ export default function PodiumTeleport() {
       // Billboard: always faces camera. Matcap projection gives natural 3D curvature.
       // Rim glow is hue-matched to caller color for that Smash Bros character select vibe.
       const sh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.8, 24, 24),
+        new THREE.SphereGeometry(0.8, 16, 16),
         new THREE.ShaderMaterial({
           uniforms: {
             atlas: { value: aT },
@@ -1308,7 +1318,8 @@ export default function PodiumTeleport() {
         const now = performance.now(); const dt = Math.min((now - last) / 1000, 0.05); last = now;
         const st = stateRef.current; st.clock += dt; const t = st.clock;
 
-        fpsBuf.current.push(now); fpsBuf.current = fpsBuf.current.filter(x => now - x < 1000);
+        fpsBuf.current.push(now);
+        while (fpsBuf.current.length > 0 && now - fpsBuf.current[0] > 1000) fpsBuf.current.shift();
 
         // Spin physics — zen mode: smooth momentum, capped speed, gentle friction
         const MAX_SPIN = 0.04; // max radians/frame — prevents wild spinning
@@ -2187,7 +2198,8 @@ export default function PodiumTeleport() {
           }
         }
 
-        // Ambient particles
+        // Ambient particles (throttled to 30fps — imperceptible for slow-floating particles)
+        if (Math.floor(t * 30) !== Math.floor((t - dt) * 30)) {
         const pp = ppGeo.attributes.position.array;
         for (let i = 0; i < pp.length / 3; i++) {
           ppLife[i] += dt * 0.12;
@@ -2207,6 +2219,7 @@ export default function PodiumTeleport() {
           pp2[i * 3] = Math.cos(a) * r; pp2[i * 3 + 2] = Math.sin(a) * r;
         }
         pp2Geo.attributes.position.needsUpdate = true;
+        } // end 30fps particle gate
 
         // Crowd — Nintendo physics (squash & stretch, head lag, arm follow-through, mini-jumps)
         const zAxis = new THREE.Vector3(0, 0, 1);
@@ -2216,6 +2229,9 @@ export default function PodiumTeleport() {
         const camDir = new THREE.Vector3();
         const headLookQ = new THREE.Quaternion();
         const headLookMat = new THREE.Matrix4();
+        const _origin = new THREE.Vector3(0, 0, 0);
+        const _up = new THREE.Vector3(0, 1, 0);
+        const _headWorld = new THREE.Vector3();
         for (let i = 0; i < count; i++) {
           const c = chars[i];
 
@@ -2301,7 +2317,7 @@ export default function PodiumTeleport() {
           const headBaseY = isOnStage ? 1.24 : 1.32; // stage head slightly lower to not float
           pos.set(cx + headTilt * 0.12 * pScale, (headBaseY + headBob + jumpH) * pScale + stageY, cz);
           camDir.set(camera.position.x - pos.x, 0, camera.position.z - pos.z).normalize();
-          headLookMat.lookAt(camDir, new THREE.Vector3(0,0,0), new THREE.Vector3(0,1,0));
+          headLookMat.lookAt(camDir, _origin, _up);
           headLookQ.setFromRotationMatrix(headLookMat);
           const tiltQ = q.setFromAxisAngle(zAxis, headTilt * 0.5);
           headLookQ.multiply(tiltQ);
@@ -2342,21 +2358,22 @@ export default function PodiumTeleport() {
         // Project speaker head to screen for speech bubble (throttled to 10fps)
         const hasSpeaker = st.speaker !== null && st.teleportPhase === "active";
         if (hasSpeaker && Math.floor(t * 10) !== Math.floor((t - dt) * 10)) {
-          const headWorld = new THREE.Vector3(
+          _headWorld.set(
             st._speakerHeadX || 0,
             (st._speakerHeadY || 3) + 1.0, // above the scaled-up head
             st._speakerHeadZ || 0
           );
-          headWorld.project(camera);
+          _headWorld.project(camera);
           const hw = renderer.domElement.clientWidth;
           const hh = renderer.domElement.clientHeight;
-          const sx = (headWorld.x * 0.5 + 0.5) * hw;
-          const sy = (-headWorld.y * 0.5 + 0.5) * hh;
+          const sx = (_headWorld.x * 0.5 + 0.5) * hw;
+          const sy = (-_headWorld.y * 0.5 + 0.5) * hh;
           setSpeakerScreenPos({ x: sx, y: sy });
         } else if (!hasSpeaker) {
           setSpeakerScreenPos(null);
         }
       }
+      renderer.compile(scene, camera);
       animate();
 
       const onR = () => { const nw = container.clientWidth, nh = container.clientHeight; camera.aspect = nw / nh; camera.updateProjectionMatrix(); renderer.setSize(nw, nh); };
