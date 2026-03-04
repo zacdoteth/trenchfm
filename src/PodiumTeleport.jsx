@@ -102,6 +102,7 @@ const ANADOL_GLSL = `
     vec2 q=vec2(fbm(p+t*0.15,oct),fbm(p+vec2(5.2,1.3)+t*0.12,oct));
     vec2 r=vec2(fbm(p+4.0*q+vec2(1.7,9.2)+t*0.09,oct),fbm(p+4.0*q+vec2(8.3,2.8)+t*0.11,oct));
     return fbm(p+4.0*r,oct);}
+  vec3 cosPal(float t,vec3 a,vec3 b,vec3 c,vec3 d){return a+b*cos(6.28318*(c*t+d));}
 `;
 
 function seededRandom(seed){let s=seed;return()=>{s=(s*16807)%2147483647;return(s-1)/2147483646;};}
@@ -237,7 +238,7 @@ export default function PodiumTeleport() {
     // Jumbotron intro animation (Mario Party style)
     jmboIntroTimer: 0, jmboIntroName: "", jmboIntroTicker: "", jmboIntroCharIdx: -1,
     // Dome / sky (Anadol)
-    domeHueShift: 0, domeSpeed: 1.0, domeIntensity: 1.0,
+    domeHueShift: 0, domeSpeed: 0.2, domeIntensity: 0.6, domeBottomHalf: true,
     // Top calls leaderboard
     topCallsToday: [],
   });
@@ -525,59 +526,76 @@ export default function PodiumTeleport() {
       const domeMat = new THREE.ShaderMaterial({
         uniforms: {
           uTime: { value: 0 },
-          uHueShift: { value: 0.0 },      // slow hue rotation (0-1 = full cycle)
-          uIntensity: { value: 1.0 },      // brightness
-          uSpeed: { value: 1.0 },          // animation speed
+          uHueShift: { value: 0.0 },
+          uIntensity: { value: 0.6 },
+          uSpeed: { value: 0.2 },
+          uBottomHalf: { value: 1.0 },
         },
         side: THREE.BackSide,
         vertexShader: `varying vec3 vP;varying vec2 vU;void main(){vP=position;vU=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;uniform float uHueShift;uniform float uIntensity;uniform float uSpeed;
+        fragmentShader: `uniform float uTime;uniform float uHueShift;uniform float uIntensity;uniform float uSpeed;uniform float uBottomHalf;
           varying vec3 vP;varying vec2 vU;${ANADOL_GLSL}
-          // Hue rotation in RGB space
-          vec3 hueRotate(vec3 col, float shift) {
-            float angle = shift * 6.28318;
-            float s = sin(angle), c2 = cos(angle);
-            vec3 w = vec3(0.299, 0.587, 0.114);
-            vec3 r;
-            r.x = dot(col, w) + dot(col - vec3(dot(col,w)), vec3(c2, c2, c2)) + dot(cross(w, col), vec3(s, s, s));
-            // Full hue rotation matrix
-            float cosA = c2, sinA = s;
-            mat3 hueRot = mat3(
-              0.299+0.701*cosA+0.168*sinA, 0.587-0.587*cosA+0.330*sinA, 0.114-0.114*cosA-0.497*sinA,
-              0.299-0.299*cosA-0.328*sinA, 0.587+0.413*cosA+0.035*sinA, 0.114-0.114*cosA+0.292*sinA,
-              0.299-0.300*cosA+1.250*sinA, 0.587-0.588*cosA-1.050*sinA, 0.114+0.886*cosA-0.203*sinA
-            );
-            return hueRot * col;
-          }
           void main(){
             float t = uTime * uSpeed;
-            // Zen auto-drift: very slow hue rotation over time (full cycle every ~120s)
             float autoHue = uHueShift + t * 0.0083;
-            float th=atan(vP.x,vP.z);float ph=acos(clamp(vP.y/50.0,-1.0,1.0));
+            float th=atan(vP.x,vP.z);
+            float ph=acos(clamp(vP.y/50.0,-1.0,1.0));
             vec2 p=vec2(th*2.0,ph*3.0);
-            float w1=domainWarp(p*0.4,t*0.8,4);float w2=domainWarp(p*0.7+vec2(3.3,7.7),t*0.6,3);
-            float w3=domainWarp(p*0.25+vec2(11.1,4.4),t*1.1,4);
-            float s2=(w1*0.5+w2*0.3+w3*0.2)*0.5+0.5;
-            // Base palette — Anadol-style
-            vec3 pink=vec3(1.0,0.18,0.47);vec3 orange=vec3(1.0,0.45,0.1);vec3 purple=vec3(0.6,0.15,1.0);
-            vec3 magenta=vec3(0.85,0.08,0.52);vec3 cyan=vec3(0.0,0.75,1.0);vec3 warm=vec3(1.0,0.85,0.7);
-            vec3 col=mix(magenta,pink,smoothstep(0.2,0.6,s2));
-            col=mix(col,orange,smoothstep(0.4,0.8,w2*0.5+0.5));
-            col=mix(col,purple,smoothstep(0.5,0.9,w3*0.5+0.5)*0.6);
-            col=mix(col,cyan,pow(max(0.0,w1*0.5+0.5),3.0)*0.3);
-            col=mix(col,warm,pow(max(0.0,s2),4.0)*0.35);
-            // Apply zen hue rotation
-            col = hueRotate(col, fract(autoHue));
-            // Grain + brightness
-            float gr=snoise(p*15.0+t*0.5)*0.5+0.5;col*=(0.85+gr*0.3);
-            float br=(0.9+sin(t*0.5)*0.1)*uIntensity;float ii=br*(0.6+s2*0.5);
-            vec3 base=vec3(0.05,0.015,0.04);
-            base = hueRotate(base, fract(autoHue));
+
+            // Triple-layer domain warping — deep organic complexity
+            float w1=domainWarp(p*0.35,t*0.7,5);
+            float w2=domainWarp(p*0.65+vec2(3.3,7.7),t*0.55,4);
+            float w3=domainWarp(p*1.1+vec2(11.1,4.4),t*0.9,3);
+            float w4=domainWarp(p*0.2+vec2(7.7,13.3),t*0.3,4);
+            float comp=(w1*0.35+w2*0.30+w3*0.20+w4*0.15)*0.5+0.5;
+
+            // IQ cosine palettes — wealth/abundance/trust color psychology
+            // Greens = growth/money, Cyans = trust/calm, Magentas = excitement/energy, Purples = luxury/premium
+            vec3 pal1=cosPal(w1*0.5+0.5+t*0.02,
+              vec3(0.4,0.25,0.5),vec3(0.45,0.45,0.5),vec3(1.0,0.8,1.0),
+              vec3(autoHue,0.25+autoHue,0.55+autoHue));
+            vec3 pal2=cosPal(w2*0.5+0.5+t*0.015,
+              vec3(0.2,0.45,0.4),vec3(0.35,0.5,0.45),vec3(0.8,1.0,1.2),
+              vec3(0.15+autoHue,0.1+autoHue,0.4+autoHue));
+            vec3 col=mix(pal1,pal2,smoothstep(0.3,0.7,w3*0.5+0.5));
+
+            // Iridescent accent — pearlescent luxury
+            vec3 iri=cosPal(comp*2.0+t*0.01,
+              vec3(0.45,0.5,0.6),vec3(0.5,0.45,0.5),vec3(1.0,1.2,1.0),
+              vec3(autoHue*0.5,0.15+autoHue*0.3,0.3+autoHue*0.7));
+            col=mix(col,iri,pow(comp,2.5)*0.4);
+
+            // Bright bloom hotspots — green/cyan (wealth glow, not orange)
+            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,3)*0.5+0.5),3.5);
+            col+=vec3(0.3,1.0,0.8)*hs*0.3;
+
+            // Deep purple in dark valleys — luxury depth
+            float valley=pow(1.0-comp,2.0);
+            col+=vec3(0.15,0.05,0.35)*valley*0.2;
+
+            // Micro-texture grain
+            float gr=snoise(p*15.0+t*0.5)*0.5+0.5;
+            col*=(0.85+gr*0.3);
+
+            // Brightness + breathing
+            float br=(0.9+sin(t*0.5)*0.1)*uIntensity;
+            float ii=br*(0.55+comp*0.55);
+
+            // Deep saturated base (never pure black)
+            vec3 base=cosPal(autoHue,vec3(0.04,0.01,0.03),vec3(0.02,0.01,0.02),
+              vec3(1.0,1.0,1.0),vec3(0.0,0.33,0.67));
             vec3 f=base+col*ii;
-            // Hot spots
-            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.7,3)*0.5+0.5),3.0);
-            vec3 hotC = hueRotate(warm, fract(autoHue));
-            f+=hotC*hs*0.4;
+
+            // Hot bloom layer — mint/cyan glow
+            f+=vec3(0.2,0.9,0.7)*hs*0.25;
+
+            // Bottom hemisphere fade — toggleable
+            float hNorm=vP.y/50.0;
+            if(uBottomHalf<0.5){
+              float fade=smoothstep(-0.3,0.15,hNorm);
+              f*=fade;
+            }
+
             gl_FragColor=vec4(f,1.0);
           }`,
       });
@@ -625,13 +643,15 @@ export default function PodiumTeleport() {
       const wg = new THREE.CylinderGeometry(ROOM_RADIUS + 1, ROOM_RADIUS + 1, 12, 64, 1, true);
       const wm = new THREE.Mesh(wg, wallMat); wm.position.y = 6; scene.add(wm);
 
-      // Podium
-      scene.add(new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 48),
-        new THREE.MeshStandardMaterial({ color: 0x15102a, emissive: 0xff2d78, emissiveIntensity: 0.15, roughness: 0.15, metalness: 0.85 })));
-      scene.children[scene.children.length - 1].position.y = 0.6;
+      // Podium — color syncs with dome hue
+      const podiumMat = new THREE.MeshStandardMaterial({ color: 0x15102a, emissive: 0xff2d78, emissiveIntensity: 0.15, roughness: 0.15, metalness: 0.85 });
+      const podiumMesh = new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 48), podiumMat);
+      podiumMesh.position.y = 0.6; scene.add(podiumMesh);
+      const ringMats = [];
       [PODIUM_RADIUS + 0.15, PODIUM_RADIUS - 0.6].forEach((r, i) => {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.05, 8, 64),
-          new THREE.MeshBasicMaterial({ color: i === 0 ? 0xff2d78 : 0xb24dff }));
+        const mat = new THREE.MeshBasicMaterial({ color: i === 0 ? 0xff2d78 : 0xb24dff });
+        ringMats.push(mat);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.05, 8, 64), mat);
         ring.rotation.x = -Math.PI / 2; ring.position.y = 1.22; scene.add(ring);
       });
 
@@ -689,7 +709,7 @@ export default function PodiumTeleport() {
       // Main 4 faces: chart + call data (same on all sides — readable from every angle)
       // Bottom ribbon: 4 detail strips (different data per side)
       // Top ribbon: ticker/price strip (same on all sides)
-      const mainH = 6, botH = 1.8, topH = 2.2;
+      const mainH = 6, botH = 1.8, topH = 2.8;
       // All 4 sides equal — square cross-section like a real NBA jumbotron
       const faceW = 11, halfD = faceW / 2;
       const mainY = 0, botY = mainY - mainH / 2 - botH / 2 - 0.15, topY = mainY + mainH / 2 + topH / 2 + 0.15;
@@ -709,10 +729,10 @@ export default function PodiumTeleport() {
       const jmboBotFaces = [botFront, botBack, botLeft, botRight];
 
       // Top ribbon strips (ticker/price — same on all)
-      const topFront = makeScreenFace(faceW, topH, 1024, 200, 0.005);
-      const topBack  = makeScreenFace(faceW, topH, 1024, 200, 0.005);
-      const topLeft  = makeScreenFace(faceW, topH, 1024, 200, 0.005);
-      const topRight = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topFront = makeScreenFace(faceW, topH, 1024, 280, 0.005);
+      const topBack  = makeScreenFace(faceW, topH, 1024, 280, 0.005);
+      const topLeft  = makeScreenFace(faceW, topH, 1024, 280, 0.005);
+      const topRight = makeScreenFace(faceW, topH, 1024, 280, 0.005);
       const jmboTopFaces = [topFront, topBack, topLeft, topRight];
 
       // Assemble into group — square box, faces at halfD from center
@@ -1133,7 +1153,7 @@ export default function PodiumTeleport() {
         ppArr, ppLife, ppGeo, pp2Arr, pp2Life, pp2Geo,
         bodyMat, armMat, legMat,
         jmboGroup, jmboFaces, jmboBotFaces, jmboTopFaces,
-        lasers, laserGroup };
+        lasers, laserGroup, podiumMat, ringMats };
 
       // ═══ DEBUG GUI — only visible with ?debug in URL ═══
       const showDebug = window.location.search.includes("debug");
@@ -1163,10 +1183,11 @@ export default function PodiumTeleport() {
         const bf = gui.addFolder("Background");
         bf.add(guiObj, "AmbientInt", 0, 5, 0.1).onChange(v => { scene.children.find(c => c.isAmbientLight).intensity = v; });
         bf.add(guiObj, "SpotInt", 0, 8, 0.1).onChange(v => { spotPink.intensity = v; });
-        guiObj.DomeHue = 0; guiObj.DomeSpeed = 1.0; guiObj.DomeInt = 1.0;
+        guiObj.DomeHue = 0; guiObj.DomeSpeed = 0.2; guiObj.DomeInt = 0.6; guiObj.DomeBtm = true;
         bf.add(guiObj, "DomeHue", 0, 1, 0.01).onChange(v => { stateRef.current.domeHueShift = v; }).name("Hue Shift");
-        bf.add(guiObj, "DomeSpeed", 0.1, 3, 0.1).onChange(v => { stateRef.current.domeSpeed = v; }).name("Dome Speed");
-        bf.add(guiObj, "DomeInt", 0.2, 2, 0.05).onChange(v => { stateRef.current.domeIntensity = v; }).name("Dome Bright");
+        bf.add(guiObj, "DomeSpeed", 0.01, 3, 0.01).onChange(v => { stateRef.current.domeSpeed = v; }).name("Dome Speed");
+        bf.add(guiObj, "DomeInt", 0.1, 2, 0.05).onChange(v => { stateRef.current.domeIntensity = v; }).name("Dome Bright");
+        bf.add(guiObj, "DomeBtm").onChange(v => { stateRef.current.domeBottomHalf = v; }).name("Bottom Half");
         container.appendChild(gui.domElement);
       }
 
@@ -1205,8 +1226,20 @@ export default function PodiumTeleport() {
         domeMat.uniforms.uHueShift.value = st.domeHueShift;
         domeMat.uniforms.uSpeed.value = st.domeSpeed;
         domeMat.uniforms.uIntensity.value = st.domeIntensity;
+        domeMat.uniforms.uBottomHalf.value = st.domeBottomHalf ? 1.0 : 0.0;
         floorMat.uniforms.uTime.value = t;
         wallMat.uniforms.uTime.value = t;
+        // Podium color syncs with dome hue — immersive Refik feel
+        const autoHueCPU = (st.domeHueShift + t * st.domeSpeed * 0.0083) % 1;
+        const hueAngle = autoHueCPU * Math.PI * 2;
+        const podEmR = 0.6 + 0.4 * Math.cos(hueAngle);
+        const podEmG = 0.2 + 0.3 * Math.cos(hueAngle + 2.094);
+        const podEmB = 0.5 + 0.4 * Math.cos(hueAngle + 4.189);
+        if (threeRef.current.podiumMat) threeRef.current.podiumMat.emissive.setRGB(podEmR, podEmG, podEmB);
+        if (threeRef.current.ringMats) {
+          threeRef.current.ringMats[0].color.setRGB(podEmR, podEmG, podEmB);
+          threeRef.current.ringMats[1].color.setRGB(podEmB, podEmR * 0.5, podEmR);
+        }
         // Toon shader time for emissive pulse
         if (threeRef.current.bodyMat) threeRef.current.bodyMat.uniforms.uTime.value = t;
         if (threeRef.current.armMat) threeRef.current.armMat.uniforms.uTime.value = t;
@@ -1481,55 +1514,78 @@ export default function PodiumTeleport() {
             function renderTopRibbon(jx, W, H) {
               jx.clearRect(0, 0, W, H);
               jx.fillStyle = "#06021a"; jx.fillRect(0, 0, W, H);
-              // Bottom edge glow
               const edgeG = jx.createLinearGradient(0, H - 4, 0, H);
               edgeG.addColorStop(0, "rgba(255,45,120,0)"); edgeG.addColorStop(1, "rgba(255,45,120,0.25)");
               jx.fillStyle = edgeG; jx.fillRect(0, H - 4, W, 4);
 
               if (si) {
                 const pad = 20;
-                // Row 1: $TICKER + caller name + change
-                const row1Y = H * 0.38;
-                jx.font = "bold 48px 'Inter', sans-serif";
+                // ── ROW 1: PFP circle + $TICKER + "by" + caller name + @followers ──
+                const row1Y = H * 0.32;
+                const pfpSize = 52;
+                // Draw PFP circle
+                const pfpImg = pfpImgsRef.current[st.jmboIntroCharIdx >= 0 ? st.jmboIntroCharIdx % pfpImgsRef.current.length : 0];
+                let lx = pad;
+                if (pfpImg && pfpImg.naturalWidth) {
+                  jx.save();
+                  jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 3, pfpSize / 2, 0, Math.PI * 2); jx.clip();
+                  jx.drawImage(pfpImg, lx, row1Y - pfpSize / 3 - pfpSize / 2, pfpSize, pfpSize);
+                  jx.restore();
+                  // Glow ring
+                  jx.strokeStyle = "#ff2d78"; jx.lineWidth = 2;
+                  jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 3, pfpSize / 2 + 2, 0, Math.PI * 2); jx.stroke();
+                  lx += pfpSize + 14;
+                }
+                // $TICKER
+                jx.font = "bold 56px 'Inter', sans-serif";
                 jx.fillStyle = "#fff"; jx.textAlign = "left";
-                jx.fillText(si.coin.ticker, pad, row1Y);
-                let rx = pad + jx.measureText(si.coin.ticker).width + 16;
-                // Caller name — same weight
-                jx.font = "bold 48px 'Inter', sans-serif";
+                jx.fillText(si.coin.ticker, lx, row1Y);
+                lx += jx.measureText(si.coin.ticker).width + 14;
+                // "by"
+                jx.font = "500 32px 'Inter', sans-serif";
+                jx.fillStyle = "#666";
+                jx.fillText("by", lx, row1Y);
+                lx += jx.measureText("by").width + 10;
+                // Caller name
+                jx.font = "bold 56px 'Inter', sans-serif";
                 jx.fillStyle = "#ff2d78";
-                jx.fillText(si.name, rx, row1Y);
-                rx += jx.measureText(si.name).width + 12;
-                // @ followers
-                jx.font = "500 22px 'JetBrains Mono', monospace";
+                jx.fillText(si.name, lx, row1Y);
+                lx += jx.measureText(si.name).width + 12;
+                // @followers
+                jx.font = "500 28px 'JetBrains Mono', monospace";
                 jx.fillStyle = "#555";
-                jx.fillText("@ " + (si.followers || "?"), rx, row1Y);
-                // Change pill — far right
-                jx.font = "bold 28px 'JetBrains Mono', monospace";
+                jx.fillText("@" + (si.followers || "?"), lx, row1Y);
+
+                // ── CHANGE % — BIG, right side, spans both rows ──
+                jx.font = "bold 64px 'JetBrains Mono', monospace";
                 jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
                 jx.textAlign = "right";
-                jx.fillText((si.coin.positive ? "+" : "") + si.coin.change, W - pad, row1Y);
+                jx.shadowColor = si.coin.positive ? "#00ff88" : "#ff4444";
+                jx.shadowBlur = 12;
+                jx.fillText((si.coin.positive ? "+" : "") + si.coin.change, W - pad, H * 0.52);
+                jx.shadowBlur = 0;
                 jx.textAlign = "left";
 
-                // Row 2: MC · Price · Liquidity · Supply (Axiom-style stat bar)
-                const row2Y = H * 0.78;
+                // ── ROW 2: MC · Price · Liquidity · Supply (bigger text) ──
+                const row2Y = H * 0.82;
                 let sx = pad;
                 const stat = (label, val, color) => {
-                  jx.font = "500 18px 'Inter', sans-serif";
-                  jx.fillStyle = "#555";
-                  jx.fillText(label, sx, row2Y - 16);
-                  jx.font = "bold 28px 'JetBrains Mono', monospace";
+                  jx.font = "600 24px 'Inter', sans-serif";
+                  jx.fillStyle = "#666";
+                  jx.fillText(label, sx, row2Y - 18);
+                  jx.font = "bold 36px 'JetBrains Mono', monospace";
                   jx.fillStyle = color || "#fff";
-                  jx.fillText(val, sx, row2Y + 12);
-                  sx += Math.max(jx.measureText(val).width, jx.measureText(label).width) + 28;
+                  jx.fillText(val, sx, row2Y + 16);
+                  sx += Math.max(jx.measureText(val).width, jx.measureText(label).width) + 32;
                 };
                 stat("MC", si.coin.mcap, "#fff");
                 stat("Price", "$" + si.coin.price, "#fff");
                 stat("Liquidity", si.coin.liq || "—", "#00d4ff");
                 stat("Supply", si.coin.supply || "1B", "#999");
               } else {
-                jx.font = "bold 52px 'Inter', sans-serif";
+                jx.font = "bold 60px 'Inter', sans-serif";
                 jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
-                jx.fillText("trench.fm", W / 2, H / 2 + 10);
+                jx.fillText("trench.fm", W / 2, H / 2 + 14);
                 jx.textAlign = "left";
               }
             }
