@@ -24,7 +24,7 @@ const COINS = [
   { ticker: "$BONK", ca: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", mcap: "$1.2B", fdv: "$1.8B", liq: "$24.5M", vol: "$89.2M", change: "+12.4%", positive: true, price: "0.00002847", supply: "56.2T", created: "2 yr ago", launchpad: "Bonk", holders: 835200 },
   { ticker: "$WIF", ca: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", mcap: "$890M", fdv: "$890M", liq: "$18.3M", vol: "$52.1M", change: "+8.7%", positive: true, price: "2.34", supply: "998M", created: "1 yr ago", launchpad: "Meteora", holders: 218400 },
   { ticker: "$POPCAT", ca: "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", mcap: "$540M", fdv: "$540M", liq: "$8.9M", vol: "$41.8M", change: "+31.2%", positive: true, price: "0.89", supply: "979M", created: "11 mo", launchpad: "Pump.fun", holders: 142800 },
-  { ticker: "$JITO", ca: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", mcap: "$2.1B", fdv: "$2.9B", liq: "$35.1M", vol: "$127M", vol: "$127M", change: "-3.2%", positive: false, price: "3.12", supply: "1B", created: "1.5 yr", launchpad: "—", holders: 94300 },
+  { ticker: "$JITO", ca: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", mcap: "$2.1B", fdv: "$2.9B", liq: "$35.1M", vol: "$127M", change: "-3.2%", positive: false, price: "3.12", supply: "1B", created: "1.5 yr", launchpad: "—", holders: 94300 },
 ];
 
 // ═══ SVG ICONS (inline, no emoji) ═══
@@ -233,7 +233,7 @@ function MiniChart({ data, positive, width = 280, height = 50 }) {
   return <canvas ref={canvasRef} style={{ width, height, display: "block" }} />;
 }
 
-export default function PodiumTeleport() {
+export default function PodiumTeleport({ user, wallets }) {
   const mountRef = useRef(null);
   const stateRef = useRef({
     chars: generateChars(CHAR_COUNT), speaker: null,
@@ -247,9 +247,9 @@ export default function PodiumTeleport() {
     // Jumbotron debug params (live-tunable via GUI)
     jmboY: 6.9, jmboScale: 0.5, jmboRotSpeed: 0.0,
     // Speaker params
-    speakerScale: 2.2, speakerY: 1.2,
+    speakerScale: 2.2, speakerX: 0, speakerY: 1.2, speakerZ: 0, stageScale: 1.0, stageRotOffset: 0,
     // Mic stand params
-    micScale: 2.4, micY: 1.2, micZ: 1.8,
+    micScale: 2.4, micY: 2.3, micZ: 2.1,
     // Guitar params (held by speaker)
     guitarScale: 1.35, guitarX: 0.05, guitarY: -0.25, guitarZ: -0.15, guitarRotX: 0.9584, guitarRotY: -0.391, guitarRotZ: -0.441,
     // Jumbotron intro animation (Mario Party style)
@@ -295,12 +295,23 @@ export default function PodiumTeleport() {
   const throwablesRef = useRef([]); // { type:"tomato"|"diamond", pos:[x,y,z], vel:[x,y,z], life:0, maxLife:0.8 }
   const MAX_THROWABLES = 15;
 
-  // Intro HUD fade — hidden during camera sweep, fades in after
+  // Velvet curtain intro
+  const [curtainsOpen, setCurtainsOpen] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
+  const curtainTimerRef = useRef(null);
+  const curtainsOpenRef = useRef(false); // for animate loop
+
+  // Intro HUD fade — hidden during camera sweep, fades in after curtains open
   const [hudVisible, setHudVisible] = useState(false);
   useEffect(() => {
-    const timer = setTimeout(() => setHudVisible(true), 4500); // match introDuration
+    curtainsOpenRef.current = curtainsOpen;
+    if (!curtainsOpen) return;
+    // Reset intro timer so cinematic sweep starts fresh on curtain open
+    stateRef.current.introActive = true;
+    stateRef.current.introTimer = 0;
+    const timer = setTimeout(() => setHudVisible(true), 4500);
     return () => clearTimeout(timer);
-  }, []);
+  }, [curtainsOpen]);
 
   // ═══ FRONTRUN API — real wallet + trades ═══
   useEffect(() => {
@@ -809,68 +820,108 @@ export default function PodiumTeleport() {
       // Walls removed — dome sphere covers everything beautifully
       const wallMat = { uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0 } } }; // stub for refs
 
-      // ═══ PODIUM — full Anadol treatment ═══
-      const podiumMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
-        transparent: true,
-        vertexShader: `varying vec3 vW;varying vec3 vN;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;vN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;varying vec3 vN;${ANADOL_GLSL}
-          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
-          // Top surface uses SAME planar XZ mapping as floor so pattern flows seamlessly
-          float topMix=smoothstep(0.85,1.1,vN.y); // 1.0 on top face, 0.0 on sides
-          // Planar coords (same as floor)
-          vec2 pFloor=vW.xz*0.06;
-          // Cylindrical coords (for sides)
-          float a=atan(vW.x,vW.z);float h=vW.y;
-          vec2 pSide=vec2(a*4.0,h*3.0);
-          // Blend between planar (top) and cylindrical (sides)
-          vec2 p=mix(pSide,pFloor*16.0,topMix);
-          float w1=domainWarp(p*0.5,t*0.6,${isMobile ? 2 : 4});float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,${isMobile ? 2 : 3});
-          float s=(w1*0.6+w2*0.4)*0.5+0.5;
-          // Use SAME palette as floor so colors match
-          vec3 c=cosPal(s+ah,vec3(0.35,0.06,0.28),vec3(0.50,0.10,0.40),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
-          vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.04,0.20,0.32),vec3(0.12,0.50,0.55),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
-          c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
-          // Lime accent matching floor
-          float limeMask=pow(s,3.0);
-          vec3 lime=cosPal(w1*0.5+0.5+ah,vec3(0.03,0.20,0.03),vec3(0.10,0.55,0.08),vec3(0.5,1.0,0.4),vec3(0.0,0.33+ah*0.2,0.67));
-          c+=lime*limeMask*0.18;
-          // Bright top surface — neon glow platform
-          float topGlow=smoothstep(1.0,1.22,h)*1.5;
-          float side=(s*0.7+0.2);
-          float i=side+topGlow;
-          // Micro grain
-          float gr=snoise(p*12.0+t*0.5)*0.5+0.5;c*=(0.92+gr*0.16);
-          // Neon bloom on top — hot pink with cyan edge
-          vec3 bloom=cosPal(ah*2.0+t*0.01,vec3(0.5,0.08,0.4),vec3(0.5,0.25,0.5),vec3(1.0,0.8,1.0),vec3(0.0,0.5,0.2));
-          vec3 cyanEdge=vec3(0.0,0.7,1.0)*topGlow*0.15;
-          // Breathing
-          float podBr=0.88+sin(t*0.55/0.2)*0.12;
-          vec3 f=vec3(0.01,0.004,0.02)+c*i*podBr+bloom*topGlow*0.35+cyanEdge;
-          gl_FragColor=vec4(f,1.0);}`,
-      });
-      const podiumMesh = new THREE.Mesh(new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 24), podiumMat);
-      podiumMesh.position.y = 0.6; scene.add(podiumMesh);
-      podiumMesh.matrixAutoUpdate = false;
-      podiumMesh.updateMatrix();
+      // ═══ SHADER FACTORIES — reusable Anadol materials for stage GLB ═══
+      function makePodiumShader() {
+        return new THREE.ShaderMaterial({
+          uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
+          transparent: true,
+          vertexShader: `varying vec3 vW;varying vec3 vN;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;vN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+          fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;varying vec3 vN;${ANADOL_GLSL}
+            void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
+            float topMix=smoothstep(0.85,1.1,vN.y);
+            vec2 pFloor=vW.xz*0.06;
+            float a=atan(vW.x,vW.z);float h=vW.y;
+            vec2 pSide=vec2(a*4.0,h*3.0);
+            vec2 p=mix(pSide,pFloor*16.0,topMix);
+            float w1=domainWarp(p*0.5,t*0.6,${isMobile ? 2 : 4});float w2=domainWarp(p*0.8+vec2(3.0,7.0),t*0.5,${isMobile ? 2 : 3});
+            float s=(w1*0.6+w2*0.4)*0.5+0.5;
+            vec3 c=cosPal(s+ah,vec3(0.35,0.06,0.28),vec3(0.50,0.10,0.40),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
+            vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.04,0.20,0.32),vec3(0.12,0.50,0.55),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
+            c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
+            float limeMask=pow(s,3.0);
+            vec3 lime=cosPal(w1*0.5+0.5+ah,vec3(0.03,0.20,0.03),vec3(0.10,0.55,0.08),vec3(0.5,1.0,0.4),vec3(0.0,0.33+ah*0.2,0.67));
+            c+=lime*limeMask*0.18;
+            float topGlow=smoothstep(1.0,1.22,h)*1.5;
+            float side=(s*0.7+0.2);float i=side+topGlow;
+            float gr=snoise(p*12.0+t*0.5)*0.5+0.5;c*=(0.92+gr*0.16);
+            vec3 bloom=cosPal(ah*2.0+t*0.01,vec3(0.5,0.08,0.4),vec3(0.5,0.25,0.5),vec3(1.0,0.8,1.0),vec3(0.0,0.5,0.2));
+            vec3 cyanEdge=vec3(0.0,0.7,1.0)*topGlow*0.15;
+            float podBr=0.88+sin(t*0.55/0.2)*0.12;
+            vec3 f=vec3(0.01,0.004,0.02)+c*i*podBr+bloom*topGlow*0.35+cyanEdge;
+            gl_FragColor=vec4(f,1.0);}`,
+        });
+      }
+      function makeLEDWallShader() {
+        return new THREE.ShaderMaterial({
+          uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
+          transparent: true,
+          vertexShader: `varying vec3 vW;varying vec2 vUv;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+          fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;varying vec2 vUv;${ANADOL_GLSL}
+            void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
+            vec2 p=vW.xz*0.08;
+            float w1=domainWarp(p*0.4,t*0.5,${isMobile ? 2 : 3});
+            float w2=domainWarp(p*0.7+vec2(2.0,5.0),t*0.4,${isMobile ? 2 : 3});
+            float s=(w1*0.5+w2*0.5)*0.5+0.5;
+            vec3 c=cosPal(s+ah,vec3(0.35,0.06,0.28),vec3(0.50,0.10,0.40),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
+            vec3 c2=cosPal(w2*0.5+0.5+ah,vec3(0.04,0.20,0.32),vec3(0.12,0.50,0.55),vec3(0.7,0.9,0.8),vec3(0.7+ah*0.2,0.25,0.05));
+            c=mix(c,c2,smoothstep(0.3,0.7,w1*0.5+0.5));
+            // Scanlines
+            float scan=sin(vW.y*40.0+t*5.0)*0.06+0.94;
+            c*=scan;
+            // LED pixel grid
+            vec2 px=fract(vW.xz*8.0);
+            float grid=smoothstep(0.04,0.12,px.x)*smoothstep(0.04,0.12,px.y);
+            c*=grid*0.85+0.15;
+            float br=0.90+sin(t*0.55/0.2)*0.10;
+            gl_FragColor=vec4(c*(s*0.8+0.3)*br*1.3,1.0);}`,
+        });
+      }
+
+      // ═══ PODIUM — raised circular stage with Anadol surface + glowing rings ═══
+      const stageMats = [];
+      const stageGroup = new THREE.Group();
+
+      // Main platform — Anadol shader surface
+      const podMat = makePodiumShader();
+      stageMats.push(podMat);
+      const podium = new THREE.Mesh(
+        new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 32),
+        podMat);
+      podium.position.y = 0.6;
+      stageGroup.add(podium);
+
+      // Glowing edge rings — cyan bottom, pink top
+      const ringGeo = new THREE.TorusGeometry(PODIUM_RADIUS + 0.1, 0.04, 8, 48);
+      const cyanRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x00d4ff }));
+      cyanRing.rotation.x = Math.PI / 2; cyanRing.position.y = 0.08;
+      stageGroup.add(cyanRing);
+      const pinkRing = new THREE.Mesh(
+        new THREE.TorusGeometry(PODIUM_RADIUS - 0.1, 0.035, 8, 48),
+        new THREE.MeshBasicMaterial({ color: 0xff2d78 }));
+      pinkRing.rotation.x = Math.PI / 2; pinkRing.position.y = 1.2;
+      stageGroup.add(pinkRing);
+
+      // Inner accent ring at mid-height
+      const midRing = new THREE.Mesh(
+        new THREE.TorusGeometry(PODIUM_RADIUS + 0.25, 0.025, 6, 48),
+        new THREE.MeshBasicMaterial({ color: 0x8844ff, transparent: true, opacity: 0.6 }));
+      midRing.rotation.x = Math.PI / 2; midRing.position.y = 0.6;
+      stageGroup.add(midRing);
+
+      const st0 = stateRef.current;
+      stageGroup.scale.setScalar(st0.stageScale);
+      stageGroup.position.y = 0;
+      scene.add(stageGroup);
 
       // ═══ MICROPHONE STAND — loaded from GLB, positioned in front of caller ═══
       let micGroup = null;
       new GLTFLoader().load("/3d/microphone.glb", (gltf) => {
         micGroup = gltf.scene;
-        // Boost materials so they're visible under dark stage lighting
         micGroup.traverse(child => {
           if (child.isMesh && child.material) {
             const m = child.material;
-            // Use the base color texture as emissive so it self-illuminates
-            if (m.map) {
-              m.emissiveMap = m.map;
-              m.emissive = new THREE.Color(1, 1, 1);
-              m.emissiveIntensity = 0.6;
-            }
-            m.metalness = 0.3;
-            m.roughness = 0.5;
-            m.needsUpdate = true;
+            if (m.map) { m.emissiveMap = m.map; m.emissive = new THREE.Color(1, 1, 1); m.emissiveIntensity = 0.6; }
+            m.metalness = 0.3; m.roughness = 0.5; m.needsUpdate = true;
           }
         });
         const st = stateRef.current;
@@ -878,35 +929,6 @@ export default function PodiumTeleport() {
         micGroup.position.set(0, st.micY, st.micZ);
         scene.add(micGroup);
         threeRef.current.micGroup = micGroup;
-      });
-
-      // ═══ ANADOL RINGS — glowing shader torus rings ═══
-      const ringShader = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
-        transparent: true,
-        vertexShader: `varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader: `uniform float uTime;uniform float uHue;uniform float uSpd;varying vec3 vW;${ANADOL_GLSL}
-          void main(){float t=uTime*uSpd;float ah=uHue+t*0.0083;
-          float a=atan(vW.x,vW.z);
-          float w1=domainWarp(vec2(a*4.0,t*0.5),t*1.2,3);
-          float s=w1*0.5+0.5;
-          // Neon ring — alternating pink/cyan pulse
-          vec3 c=cosPal(s+ah+t*0.02,vec3(0.12,0.02,0.10),vec3(0.80,0.10,0.50),vec3(0.8,0.4,0.9),vec3(ah*0.3,0.08,0.15+ah*0.2));
-          vec3 c2=vec3(0.0,0.7,1.0)*smoothstep(0.4,0.8,s); // cyan accent
-          float pulse=0.7+0.3*sin(t*3.0+a*2.0);
-          vec3 f=(c+c2*0.3)*pulse*1.4;
-          // Lime sparkle on ring
-          float limeS=pow(max(0.0,sin(a*8.0+t*4.0)*0.5+0.5),8.0)*0.15;
-          f+=vec3(0.1,1.0,0.05)*limeS;
-          gl_FragColor=vec4(f,0.9);}`,
-      });
-      const ringShader2 = ringShader.clone();
-      const ringMats = [ringShader, ringShader2];
-      [PODIUM_RADIUS + 0.2, PODIUM_RADIUS + 0.8].forEach((r, i) => {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.04, 6, 48), ringMats[i]);
-        ring.rotation.x = -Math.PI / 2; ring.position.y = 1.22; scene.add(ring);
-        ring.matrixAutoUpdate = false;
-        ring.updateMatrix();
       });
 
       // ═══ 4-SIDED JUMBOTRON — stadium scoreboard, fixed in space ═══
@@ -1062,6 +1084,73 @@ export default function PodiumTeleport() {
       jmboGroup.position.set(0, stateRef.current.jmboY, 0);
       jmboGroup.rotation.y = 0;
       scene.add(jmboGroup);
+
+      // ═══ CLUB SPEAKERS — horizontal line arrays hanging from jumbotron ═══
+      function makeLineArraySpeaker(unitCount) {
+        const spkGroup = new THREE.Group();
+        const unitW = 3.2, unitH = 0.55, unitD = 0.8; // wide, short, shallow — line array style
+        const cabMat = new THREE.MeshStandardMaterial({ color: 0x1a0e28, metalness: 0.85, roughness: 0.2 });
+        const grillMat = new THREE.MeshStandardMaterial({ color: 0x0a0418, metalness: 0.3, roughness: 0.8 });
+        const cyanGlow = new THREE.MeshBasicMaterial({ color: 0x00d4ff });
+        const pinkGlow = new THREE.MeshBasicMaterial({ color: 0xff2d78 });
+        // Mounting yoke on top
+        const yokeMat = new THREE.MeshStandardMaterial({ color: 0x1a1228, metalness: 0.9, roughness: 0.15 });
+        const yoke = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.25, 0.5), yokeMat);
+        yoke.position.y = unitCount * (unitH + 0.06) / 2 + 0.15;
+        spkGroup.add(yoke);
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.2, 6), yokeMat);
+        rod.position.y = yoke.position.y + 0.72;
+        spkGroup.add(rod);
+        for (let i = 0; i < unitCount; i++) {
+          const yOff = (unitCount / 2 - i - 0.5) * (unitH + 0.06);
+          // Cabinet body
+          const cab = new THREE.Mesh(new THREE.BoxGeometry(unitW, unitH, unitD), cabMat);
+          cab.position.y = yOff;
+          spkGroup.add(cab);
+          // Front grill
+          const grill = new THREE.Mesh(new THREE.BoxGeometry(unitW - 0.1, unitH - 0.08, 0.04), grillMat);
+          grill.position.set(0, yOff, unitD / 2 + 0.01);
+          spkGroup.add(grill);
+          // Horizontal driver slot — glowing cyan line across the front
+          const slot = new THREE.Mesh(new THREE.BoxGeometry(unitW * 0.75, 0.06, 0.05), cyanGlow);
+          slot.position.set(0, yOff, unitD / 2 + 0.025);
+          spkGroup.add(slot);
+          // Small driver circles (2 woofers per unit)
+          [-unitW * 0.28, unitW * 0.28].forEach(dx => {
+            const driver = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.02, 6, 16), cyanGlow);
+            driver.position.set(dx, yOff, unitD / 2 + 0.025);
+            spkGroup.add(driver);
+          });
+          // Pink LED strip on bottom edge of each unit
+          const led = new THREE.Mesh(new THREE.BoxGeometry(unitW - 0.2, 0.025, 0.04), pinkGlow);
+          led.position.set(0, yOff - unitH / 2 + 0.02, unitD / 2 + 0.01);
+          spkGroup.add(led);
+        }
+        // Side accent strips — cyan vertical on each side
+        const totalH = unitCount * (unitH + 0.06);
+        [-unitW / 2 + 0.03, unitW / 2 - 0.03].forEach(lx => {
+          const sled = new THREE.Mesh(new THREE.BoxGeometry(0.03, totalH, 0.04), cyanGlow);
+          sled.position.set(lx, 0, unitD / 2 + 0.01);
+          spkGroup.add(sled);
+        });
+        return spkGroup;
+      }
+      // Hang line arrays from the front 2 jumbotron corners (audience-facing)
+      const spkCornerX = halfD - 0.5;
+      const spkHangY = botY - botH / 2 - 0.15 - 2.0; // below bottom plate
+      [[-spkCornerX, halfD], [spkCornerX, halfD]].forEach(([sx, sz]) => {
+        const spk = makeLineArraySpeaker(4); // 4-unit stack
+        spk.position.set(sx, spkHangY, sz);
+        spk.rotation.y = Math.PI; // face outward (toward audience)
+        jmboGroup.add(spk);
+      });
+      // Back 2 corners — smaller 3-unit stacks
+      [[-spkCornerX, -halfD], [spkCornerX, -halfD]].forEach(([sx, sz]) => {
+        const spk = makeLineArraySpeaker(3);
+        spk.position.set(sx, spkHangY, sz);
+        spk.rotation.y = 0;
+        jmboGroup.add(spk);
+      });
 
       // ═══ TELEPORT BEAM VFX ═══
       // Vertical beam cylinder (scales up/down during teleport)
@@ -1464,7 +1553,7 @@ export default function PodiumTeleport() {
         ppArr, ppLife, ppGeo, pp2Arr, pp2Life, pp2Geo,
         bodyMat, armMat, legMat,
         jmboGroup, jmboFaces, jmboBotFaces, jmboTopFaces, tomatoMeshes, diamondMeshes,
-        lasers, laserGroup, podiumMat, ringMats };
+        lasers, laserGroup, stageGroup, stageMats };
 
       // ═══ DEBUG GUI — only visible with ?debug in URL ═══
       const showDebug = window.location.search.includes("debug");
@@ -1481,7 +1570,7 @@ export default function PodiumTeleport() {
         const guiObj = {
           JmboY: st2.jmboY, JmboScale: st2.jmboScale, JmboSpin: st2.jmboRotSpeed || 0,
           CamH: st2.cameraHeight, CamD: st2.cameraDist,
-          SpeakerScale: st2.speakerScale || 1.8, SpeakerY: st2.speakerY || 1.2,
+          SpeakerScale: st2.speakerScale || 1.8, SpeakerX: st2.speakerX || 0, SpeakerY: st2.speakerY || 1.2, SpeakerZ: st2.speakerZ || 0,
           AmbientInt: 1.5, SpotInt: 3,
         };
         const jf = gui.addFolder("Jumbotron");
@@ -1493,7 +1582,9 @@ export default function PodiumTeleport() {
         cf.add(guiObj, "CamD", 10, 45, 0.5).onChange(v => { stateRef.current.cameraDist = v; });
         const sf = gui.addFolder("Speaker");
         sf.add(guiObj, "SpeakerScale", 1, 3, 0.1).onChange(v => { stateRef.current.speakerScale = v; });
+        sf.add(guiObj, "SpeakerX", -5, 5, 0.1).onChange(v => { stateRef.current.speakerX = v; });
         sf.add(guiObj, "SpeakerY", 0.5, 3, 0.1).onChange(v => { stateRef.current.speakerY = v; });
+        sf.add(guiObj, "SpeakerZ", -5, 5, 0.1).onChange(v => { stateRef.current.speakerZ = v; });
         const mf = gui.addFolder("Mic Stand");
         guiObj.MicScale = st2.micScale || 1.0;
         guiObj.MicY = st2.micY || 1.2;
@@ -1516,6 +1607,11 @@ export default function PodiumTeleport() {
         gf.add(guiObj, "GuitarRotX", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotX = v; });
         gf.add(guiObj, "GuitarRotY", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotY = v; });
         gf.add(guiObj, "GuitarRotZ", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotZ = v; });
+        const df = gui.addFolder("Stage Model");
+        guiObj.StageScale = st2.stageScale || 1.0;
+        guiObj.StageRotOffset = st2.stageRotOffset || 0;
+        df.add(guiObj, "StageScale", 0.1, 5, 0.05).onChange(v => { stateRef.current.stageScale = v; });
+        df.add(guiObj, "StageRotOffset", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.stageRotOffset = v; });
         const bf = gui.addFolder("Background");
         bf.add(guiObj, "AmbientInt", 0, 5, 0.1).onChange(v => { scene.children.find(c => c.isAmbientLight).intensity = v; });
         bf.add(guiObj, "SpotInt", 0, 8, 0.1).onChange(v => { spotPink.intensity = v; });
@@ -1541,15 +1637,21 @@ export default function PodiumTeleport() {
         while (fpsBuf.current.length > 0 && now - fpsBuf.current[0] > 1000) fpsBuf.current.shift();
 
         // ═══ CINEMATIC INTRO SWEEP — bird's eye → gameplay position ═══
-        if (st.introActive) {
+        if (st.introActive && !curtainsOpenRef.current) {
+          // Curtains closed — hold at bird's-eye establishing shot, slow orbit for peek
+          st.cameraAngle += dt * 0.08;
+          camera.position.x = Math.sin(st.cameraAngle) * st.introStartDist;
+          camera.position.z = Math.cos(st.cameraAngle) * st.introStartDist;
+          camera.position.y = st.introStartHeight;
+          camera.lookAt(0, st.introStartLookY, 0);
+        } else if (st.introActive && curtainsOpenRef.current) {
+          // Curtains open — sweep down from bird's eye to seat level
           st.introTimer += dt;
           const p = Math.min(st.introTimer / st.introDuration, 1);
-          // Cubic ease-out for smooth "landing" feel
           const e = 1 - Math.pow(1 - p, 3);
           const iH = st.introStartHeight + (st.introEndHeight - st.introStartHeight) * e;
           const iD = st.introStartDist + (st.introEndDist - st.introStartDist) * e;
           const iLY = st.introStartLookY + (st.introEndLookY - st.introStartLookY) * e;
-          // Slow orbit during intro for cinematic feel
           st.cameraAngle += dt * 0.15;
           camera.position.x = Math.sin(st.cameraAngle) * iD;
           camera.position.z = Math.cos(st.cameraAngle) * iD;
@@ -1588,17 +1690,16 @@ export default function PodiumTeleport() {
         wallMat.uniforms.uTime.value = t;
         wallMat.uniforms.uHue.value = st.domeHueShift;
         wallMat.uniforms.uSpd.value = st.domeSpeed;
-        // Podium GLSL shader syncs with dome
-        if (threeRef.current.podiumMat && threeRef.current.podiumMat.uniforms) {
-          threeRef.current.podiumMat.uniforms.uTime.value = t;
-          threeRef.current.podiumMat.uniforms.uHue.value = st.domeHueShift;
-          threeRef.current.podiumMat.uniforms.uSpd.value = st.domeSpeed;
-        }
-        // Rings — GLSL shader uniforms
-        if (threeRef.current.ringMats) {
-          threeRef.current.ringMats.forEach(m => {
+        // Stage GLB — update shader uniforms + rotation
+        if (threeRef.current.stageMats) {
+          threeRef.current.stageMats.forEach(m => {
             if (m.uniforms) { m.uniforms.uTime.value = t; m.uniforms.uHue.value = st.domeHueShift; m.uniforms.uSpd.value = st.domeSpeed; }
           });
+        }
+        if (threeRef.current.stageGroup) {
+          const camAngle = Math.atan2(camera.position.x, camera.position.z);
+          threeRef.current.stageGroup.rotation.y = camAngle + st.stageRotOffset;
+          threeRef.current.stageGroup.scale.setScalar(st.stageScale);
         }
         // Toon shader time for emissive pulse
         if (threeRef.current.bodyMat) threeRef.current.bodyMat.uniforms.uTime.value = t;
@@ -2601,7 +2702,7 @@ export default function PodiumTeleport() {
           const spkScale = st.speakerScale || 1.8;
           let cx, cz, sv;
           if (isOnStage) {
-            cx = 0; cz = 0;
+            cx = st.speakerX || 0; cz = st.speakerZ || 0;
             if (st.teleportPhase === "beam_in") {
               const s = Math.min((st.teleportTimer - 0.25) / 0.3, 1);
               sv = 0.001 + s * (spkScale - 0.001);
@@ -3150,10 +3251,131 @@ export default function PodiumTeleport() {
         @keyframes consoleUp{from{transform:translateY(100%);opacity:0.8}to{transform:translateY(0);opacity:1}}
         @keyframes tabSlide{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
         @keyframes consoleGlow{0%,100%{box-shadow:0 0 8px rgba(0,212,255,0.3)}50%{box-shadow:0 0 20px rgba(0,212,255,0.5)}}
+        @keyframes curtainSwayL{
+          0%{transform:translateX(0) scaleX(1)}
+          12%{transform:translateX(1.8%) scaleX(1.008)}
+          28%{transform:translateX(-0.6%) scaleX(0.997)}
+          42%{transform:translateX(1.2%) scaleX(1.004)}
+          58%{transform:translateX(-0.9%) scaleX(0.998)}
+          72%{transform:translateX(1.5%) scaleX(1.006)}
+          88%{transform:translateX(-0.4%) scaleX(0.999)}
+          100%{transform:translateX(0) scaleX(1)}
+        }
+        @keyframes curtainSwayR{
+          0%{transform:translateX(0) scaleX(1)}
+          15%{transform:translateX(-1.6%) scaleX(1.007)}
+          32%{transform:translateX(0.7%) scaleX(0.998)}
+          48%{transform:translateX(-1.3%) scaleX(1.005)}
+          62%{transform:translateX(0.5%) scaleX(0.997)}
+          78%{transform:translateX(-1.0%) scaleX(1.003)}
+          92%{transform:translateX(0.3%) scaleX(0.999)}
+          100%{transform:translateX(0) scaleX(1)}
+        }
+        @keyframes foldShimmerL{0%{background-position:0% 0%}30%{background-position:1% 5%}60%{background-position:-0.5% 2%}100%{background-position:0% 0%}}
+        @keyframes foldShimmerR{0%{background-position:0% 0%}35%{background-position:-1% 3%}70%{background-position:0.5% 6%}100%{background-position:0% 0%}}
+        @keyframes curtainGlowPulse{0%,100%{opacity:0.3;box-shadow:0 0 40px rgba(255,45,120,0.2),0 0 80px rgba(0,212,255,0.12)}50%{opacity:0.6;box-shadow:0 0 60px rgba(255,45,120,0.4),0 0 100px rgba(0,212,255,0.22)}}
+        @keyframes curtainFadeUI{0%{opacity:1}100%{opacity:0;pointer-events:none}}
+        @keyframes curtainEnterPulse{0%,100%{box-shadow:0 0 12px rgba(255,45,120,0.4),inset 0 0 8px rgba(255,45,120,0.1)}50%{box-shadow:0 0 24px rgba(255,45,120,0.6),inset 0 0 12px rgba(255,45,120,0.15)}}
+        @keyframes curtainOpenL{
+          0%{transform:translateX(0) scaleX(1)}
+          4%{transform:translateX(1.2%) scaleX(1.02)}
+          10%{transform:translateX(0.5%) scaleX(1.01)}
+          18%{transform:translateX(-8%) scaleX(0.99)}
+          35%{transform:translateX(-45%) scaleX(0.97)}
+          55%{transform:translateX(-82%) scaleX(0.98)}
+          72%{transform:translateX(-100%) scaleX(0.995)}
+          85%{transform:translateX(-103%) scaleX(1.003)}
+          93%{transform:translateX(-104.5%) scaleX(1)}
+          100%{transform:translateX(-105%) scaleX(1)}
+        }
+        @keyframes curtainOpenR{
+          0%{transform:translateX(0) scaleX(1)}
+          4%{transform:translateX(-1.2%) scaleX(1.02)}
+          10%{transform:translateX(-0.5%) scaleX(1.01)}
+          18%{transform:translateX(8%) scaleX(0.99)}
+          35%{transform:translateX(45%) scaleX(0.97)}
+          55%{transform:translateX(82%) scaleX(0.98)}
+          72%{transform:translateX(100%) scaleX(0.995)}
+          85%{transform:translateX(103%) scaleX(1.003)}
+          93%{transform:translateX(104.5%) scaleX(1)}
+          100%{transform:translateX(105%) scaleX(1)}
+        }
+        @keyframes curtainGlowFade{
+          0%{opacity:1}
+          30%{opacity:1.5}
+          100%{opacity:0}
+        }
         .chat-input:focus{border-color:rgba(255,45,120,0.5)!important;box-shadow:0 0 12px rgba(255,45,120,0.2)!important;background:rgba(255,45,120,0.04)!important}
       `}</style>
 
       <div ref={mountRef} style={{ width: "100%", height: "100%", touchAction: "none", cursor: "grab" }} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU} />
+
+      {/* ═══ VELVET CURTAIN — single persistent element, animates open on click ═══ */}
+      {!sceneReady && (
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 100, pointerEvents: curtainsOpen ? "none" : "auto", overflow: "hidden" }}>
+          {/* Left curtain — swaying idle, sweeps left on open */}
+          <div style={{
+            position: "absolute", top: "-3%", left: "-18%", width: "67%", height: "106%",
+            animation: curtainsOpen
+              ? "curtainOpenL 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards"
+              : "curtainSwayL 9s ease-in-out infinite",
+            transformOrigin: "top right",
+            zIndex: 2,
+          }}>
+            {/* Base velvet — rich asymmetric folds */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: `linear-gradient(90deg, #06000d 0%, #0e021a 3%, #1c0520 5.5%, #0d0215 7.5%, #28081e 10%, #180420 13%, #0a0112 15%, #1e0620 18%, #2e0a22 20.5%, #1a051a 22%, #0f0316 24.5%, #28081e 27.5%, #3a0c24 30%, #200620 32%, #120318 35%, #0c0214 37.5%, #200720 40.5%, #32091e 43%, #1e0520 45.5%, #140418 48.5%, #28081c 51%, #38091e 54%, #2a0718 57%, #180520 59.5%, #0e0316 62%, #220720 64.5%, #3c0b24 67.5%, #2c081c 70%, #100318 73%, #340a22 76.5%, #220620 79%, #160420 82%, #2e091e 85%, #3e0c26 88.5%, #2a081c 91.5%, #380b22 95%, #220720 97.5%, #140418 100%), linear-gradient(180deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.1) 3%, transparent 7%, transparent 88%, rgba(0,0,0,0.08) 94%, rgba(0,0,0,0.3) 100%)` }} />
+            {/* Velvet sheen on fold peaks */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: `linear-gradient(90deg, transparent 0%, transparent 9%, rgba(255,160,180,0.07) 10.5%, transparent 12%, transparent 19%, rgba(255,140,170,0.09) 20.5%, rgba(255,180,200,0.04) 22%, transparent 23%, transparent 29%, rgba(200,140,220,0.06) 30.5%, transparent 32%, transparent 42.5%, rgba(255,160,190,0.08) 44%, transparent 46%, transparent 53%, rgba(220,150,240,0.07) 54.5%, transparent 57.5%, transparent 65%, rgba(255,150,180,0.09) 66.5%, transparent 69%, transparent 78%, rgba(200,130,220,0.06) 79.5%, transparent 81.5%, transparent 87.5%, rgba(255,160,190,0.08) 89%, transparent 91%, transparent 96%, rgba(255,140,180,0.04) 97.5%, transparent 100%), linear-gradient(170deg, rgba(255,200,240,0.04) 0%, transparent 15%, rgba(255,160,200,0.025) 35%, transparent 55%, rgba(200,140,255,0.02) 78%, transparent 95%)`, backgroundSize: "100% 120%", animation: curtainsOpen ? "none" : "foldShimmerL 14s ease-in-out infinite", mixBlendMode: "screen" }} />
+            {/* Fold valley shadows */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: `linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.3) 7%, transparent 9%, transparent 14%, rgba(0,0,0,0.22) 15.5%, transparent 17%, transparent 23.5%, rgba(0,0,0,0.2) 24.5%, transparent 26%, transparent 36.5%, rgba(0,0,0,0.25) 38%, transparent 40%, transparent 47.5%, rgba(0,0,0,0.18) 49%, transparent 50.5%, transparent 60.5%, rgba(0,0,0,0.22) 62%, transparent 63.5%, transparent 72%, rgba(0,0,0,0.2) 73.5%, transparent 75.5%, transparent 84.5%, rgba(0,0,0,0.25) 86%, transparent 88%, transparent 93.5%, rgba(0,0,0,0.18) 95%, transparent 97%)` }} />
+            {/* Inner edge — soft shadow */}
+            <div style={{ position: "absolute", top: 0, right: 0, width: "12%", height: "100%", background: "linear-gradient(to left, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.15) 50%, transparent 100%)" }} />
+            {/* Top gather */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "3.5%", background: "linear-gradient(180deg, #060010 0%, rgba(15,3,20,0.95) 40%, rgba(20,4,24,0.6) 70%, transparent 100%)", boxShadow: "0 6px 25px rgba(0,0,0,0.6)", zIndex: 1 }} />
+            {/* Bottom weight */}
+            <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "8%", background: "linear-gradient(0deg, rgba(6,0,13,0.7) 0%, rgba(10,1,18,0.3) 40%, transparent 100%)" }} />
+          </div>
+          {/* Right curtain — mirrored folds, sweeps right on open */}
+          <div style={{
+            position: "absolute", top: "-3%", right: "-18%", width: "67%", height: "106%",
+            animation: curtainsOpen
+              ? "curtainOpenR 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards"
+              : "curtainSwayR 12s ease-in-out infinite 1.2s",
+            transformOrigin: "top left",
+            zIndex: 2,
+          }}>
+            {/* Base velvet */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: `linear-gradient(90deg, #140418 0%, #380b22 3%, #2a081c 5.5%, #1c051c 8%, #0e0316 11%, #26071e 13.5%, #3c0b24 16.5%, #1e0620 19%, #100318 22%, #200720 25%, #2e0a22 28%, #180520 30.5%, #0c0214 33.5%, #320a20 37%, #240720 40%, #140418 43%, #0a0112 45.5%, #1e0620 48.5%, #2c091e 51.5%, #380b22 54.5%, #200620 57%, #120318 60%, #280820 63%, #3a0c24 66.5%, #1e0520 69%, #100316 72%, #220720 75.5%, #2e091e 78.5%, #180520 81%, #260820 84%, #3c0c26 87.5%, #280820 90.5%, #1a0520 93%, #200720 96%, #0d0215 98%, #06000d 100%), linear-gradient(180deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.1) 3%, transparent 7%, transparent 88%, rgba(0,0,0,0.08) 94%, rgba(0,0,0,0.3) 100%)` }} />
+            {/* Velvet sheen */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: `linear-gradient(90deg, transparent 0%, transparent 4%, rgba(220,150,240,0.06) 5.5%, transparent 7%, transparent 14.5%, rgba(255,160,190,0.08) 16%, transparent 18%, transparent 26%, rgba(255,140,170,0.07) 27.5%, transparent 29.5%, transparent 37.5%, rgba(200,140,220,0.09) 39%, transparent 41%, transparent 50%, rgba(255,170,200,0.06) 51.5%, transparent 54%, transparent 60.5%, rgba(255,150,180,0.08) 62%, transparent 64.5%, transparent 70.5%, rgba(220,160,240,0.07) 72%, transparent 74.5%, transparent 83.5%, rgba(255,160,190,0.09) 85%, transparent 87.5%, transparent 93.5%, rgba(200,140,220,0.05) 95%, transparent 97%), linear-gradient(190deg, rgba(200,180,255,0.03) 0%, transparent 12%, rgba(255,170,220,0.025) 42%, transparent 58%, rgba(200,140,255,0.015) 82%, transparent 96%)`, backgroundSize: "100% 120%", animation: curtainsOpen ? "none" : "foldShimmerR 17s ease-in-out infinite 2.5s", mixBlendMode: "screen" }} />
+            {/* Fold valley shadows */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: `linear-gradient(90deg, transparent 0%, transparent 9.5%, rgba(0,0,0,0.25) 10.5%, transparent 12%, transparent 20%, rgba(0,0,0,0.2) 21%, transparent 22.5%, transparent 31.5%, rgba(0,0,0,0.22) 33%, transparent 34.5%, transparent 44%, rgba(0,0,0,0.18) 45.5%, transparent 47%, transparent 57%, rgba(0,0,0,0.24) 58.5%, transparent 60.5%, transparent 68%, rgba(0,0,0,0.2) 69.5%, transparent 71.5%, transparent 79.5%, rgba(0,0,0,0.22) 81%, transparent 83%, transparent 89%, rgba(0,0,0,0.2) 90.5%, transparent 92.5%, transparent 97%, rgba(0,0,0,0.15) 98.5%, transparent 100%)` }} />
+            {/* Inner edge — soft shadow */}
+            <div style={{ position: "absolute", top: 0, left: 0, width: "12%", height: "100%", background: "linear-gradient(to right, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.15) 50%, transparent 100%)" }} />
+            {/* Top gather */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "3.5%", background: "linear-gradient(180deg, #060010 0%, rgba(15,3,20,0.95) 40%, rgba(20,4,24,0.6) 70%, transparent 100%)", boxShadow: "0 6px 25px rgba(0,0,0,0.6)", zIndex: 1 }} />
+            {/* Bottom weight */}
+            <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "8%", background: "linear-gradient(0deg, rgba(6,0,13,0.7) 0%, rgba(10,1,18,0.3) 40%, transparent 100%)" }} />
+          </div>
+          {/* Center gap — soft light bleeding through, brightens on open */}
+          <div style={{ position: "absolute", top: 0, left: "47.5%", width: "5%", height: "100%", background: "linear-gradient(180deg, rgba(0,212,255,0.02) 0%, rgba(255,45,120,0.06) 20%, rgba(0,212,255,0.04) 45%, rgba(255,45,120,0.06) 70%, rgba(0,212,255,0.03) 100%)", boxShadow: "0 0 60px 25px rgba(255,45,120,0.06), 0 0 120px 50px rgba(0,212,255,0.04)", animation: curtainsOpen ? "curtainGlowFade 1.5s ease-out forwards" : "curtainGlowPulse 5s ease-in-out infinite", mixBlendMode: "screen", zIndex: 1 }} />
+          <div style={{ position: "absolute", top: "5%", left: "49.5%", width: "1%", height: "90%", background: "linear-gradient(180deg, transparent 0%, rgba(255,45,120,0.15) 15%, rgba(0,212,255,0.2) 45%, rgba(255,45,120,0.15) 80%, transparent 100%)", borderRadius: 3, filter: "blur(3px)", animation: curtainsOpen ? "curtainGlowFade 1.2s ease-out forwards" : "curtainGlowPulse 3.5s ease-in-out infinite 0.8s", mixBlendMode: "screen", zIndex: 1 }} />
+          {/* UI overlay — fades out when opening */}
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 3, gap: 16, ...(curtainsOpen ? { animation: "curtainFadeUI 0.5s ease-out forwards", pointerEvents: "none" } : {}) }}>
+            <div style={{ position: "relative", marginBottom: 4 }}>
+              <div style={{ fontFamily: "'Press Start 2P'", fontSize: 22, letterSpacing: 2, color: "transparent", background: "linear-gradient(135deg, #ff2d78, #ff6622, #ff2d78)", backgroundSize: "200% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", filter: "drop-shadow(0 0 16px rgba(255,45,120,0.5)) drop-shadow(0 0 40px rgba(255,45,120,0.2))" }}>trench.fm</div>
+              <div style={{ position: "absolute", top: 1, left: 1, fontFamily: "'Press Start 2P'", fontSize: 22, letterSpacing: 2, color: "rgba(0,0,0,0.8)", filter: "blur(4px)", zIndex: -1 }}>trench.fm</div>
+            </div>
+            <div style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 400, letterSpacing: 3, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", marginBottom: 6 }}>live crypto calls</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 28, padding: "6px 14px", borderRadius: 20, background: "rgba(0,255,136,0.04)", border: "1px solid rgba(0,255,136,0.15)" }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00ff88", animation: "liveDot 2s infinite", boxShadow: "0 0 6px rgba(0,255,136,0.6)" }} />
+              <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: "#00ff88", letterSpacing: -0.3, textShadow: "0 0 8px rgba(0,255,136,0.5)" }}>{liveCount} listening</span>
+            </div>
+            <button onClick={() => { setCurtainsOpen(true); curtainTimerRef.current = setTimeout(() => setSceneReady(true), 2800); }} style={{ fontFamily: "'Press Start 2P'", fontSize: 10, letterSpacing: 1, color: "#fff", background: "rgba(255,45,120,0.12)", border: "1px solid rgba(255,45,120,0.45)", borderRadius: 24, padding: "14px 32px", cursor: "pointer", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", animation: "curtainEnterPulse 3s ease-in-out infinite", transition: "all 0.3s cubic-bezier(0.2, 0, 0.2, 1)", textShadow: "0 0 12px rgba(255,45,120,0.5)" }} onMouseEnter={e => { e.target.style.background = "rgba(255,45,120,0.25)"; e.target.style.transform = "scale(1.06)"; e.target.style.borderColor = "rgba(255,45,120,0.7)"; }} onMouseLeave={e => { e.target.style.background = "rgba(255,45,120,0.12)"; e.target.style.transform = "scale(1)"; e.target.style.borderColor = "rgba(255,45,120,0.45)"; }}>Enter the Trench</button>
+            <button onClick={() => { setCurtainsOpen(true); curtainTimerRef.current = setTimeout(() => setSceneReady(true), 2800); }} style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 500, letterSpacing: 0.5, color: "rgba(255,255,255,0.4)", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "8px 20px", marginTop: 4, cursor: "pointer", transition: "all 0.2s ease" }} onMouseEnter={e => { e.target.style.color = "rgba(255,255,255,0.7)"; e.target.style.borderColor = "rgba(255,255,255,0.25)"; }} onMouseLeave={e => { e.target.style.color = "rgba(255,255,255,0.4)"; e.target.style.borderColor = "rgba(255,255,255,0.1)"; }}>Spectate</button>
+          </div>
+        </div>
+      )}
 
       {/* TOP BAR — transparent, text glows over Anadol */}
       <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "none", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: hudVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
