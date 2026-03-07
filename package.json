@@ -4,12 +4,21 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"node --env-file=.env --watch server/index.js\"",
+    "dev:client": "vite",
+    "dev:server": "node --env-file=.env --watch server/index.js",
     "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "start": "node --env-file=.env server/index.js",
+    "preview": "vite build && node --env-file=.env server/index.js",
+    "lint": "eslint ."
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "@supabase/supabase-js": "^2.98.0",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "lil-gui": "^0.21.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

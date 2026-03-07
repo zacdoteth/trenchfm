@@ -4,3 +4,7 @@ dist/
 *.local
 .env
 .env.*
+server/podium.db
+server/podium.db-wal
+server/podium.db-shm
+*.bak

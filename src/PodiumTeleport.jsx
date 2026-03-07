@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { startTransition, useState, useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import GUI from "lil-gui";
+import { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import {
-  getWalletBalance, executeTrade, getSolPrice, usdToSol,
-  connectWebSocket, disconnectWebSocket, getWalletAddress, solscanTx,
+  getWalletBalance, executeTrade, getSolPrice, usdToSol, getWalletAddress,
+  connectWebSocket, disconnectWebSocket, solscanTx, searchTokens, lookupToken, fetchTrendingSolana,
+  fetchTokenChart, findPoolAddress,
+  fetchTokenDetail, fetchTokenHolders, fetchTokenTraders, fetchRecentTrades,
 } from "./frontrun.js";
 
 // ═══════════════════════════════════════════════════════
@@ -12,19 +15,20 @@ import {
 // Beam in/out VFX + Price chart on call
 // ═══════════════════════════════════════════════════════
 
-const CHAR_COUNT = 400;
+const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+const CHAR_COUNT = isMobile ? 200 : 400;
 const ROOM_RADIUS = 26;
 const PODIUM_RADIUS = 3.2;
 const INNER_RING = 5.5;
 
-const PFP_NAMES = ["AzFlin","biz","ferengi","frostyflakes","icobeast","jin","phanes","pupul","rekt","rob","shinkiro14","skely","Tintin","ultra","vn","zac"];
+const PFP_NAMES = ["abhi","AzFlin","bandit","biz","ferengi","frostyflakes","icobeast","jin","phanes","pupul","rekt","rob","shinkiro14","skely","Tintin","ultra","vn","zac"];
 const NAMES = PFP_NAMES;
 const CHAT_MSGS = ["LFG 🔥🔥🔥","ser this is the play","already 10x'd","wen moon??","chart looking bullish af","SEND IT 🚀","ngmi","ape in","few","this is it","NFA but buying","diamond hands only","already in","massive bags","gm gm","wagmi","just aped 5 SOL","dev is based","easy 100x","we're so early","floor is in","🚀🚀🚀","HODL","zoom out"];
 const COINS = [
-  { ticker: "$BONK", ca: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", mcap: "$1.2B", fdv: "$1.8B", liq: "$24.5M", vol: "$89.2M", change: "+12.4%", positive: true, price: "0.00002847", supply: "56.2T", created: "2 yr ago", launchpad: "Bonk", holders: 835200 },
-  { ticker: "$WIF", ca: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", mcap: "$890M", fdv: "$890M", liq: "$18.3M", vol: "$52.1M", change: "+8.7%", positive: true, price: "2.34", supply: "998M", created: "1 yr ago", launchpad: "Meteora", holders: 218400 },
-  { ticker: "$POPCAT", ca: "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", mcap: "$540M", fdv: "$540M", liq: "$8.9M", vol: "$41.8M", change: "+31.2%", positive: true, price: "0.89", supply: "979M", created: "11 mo", launchpad: "Pump.fun", holders: 142800 },
-  { ticker: "$JITO", ca: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", mcap: "$2.1B", fdv: "$2.9B", liq: "$35.1M", vol: "$127M", change: "-3.2%", positive: false, price: "3.12", supply: "1B", created: "1.5 yr", launchpad: "—", holders: 94300 },
+  { ticker: "$BONK", name: "Bonk", ca: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", mcap: "$1.2B", fdv: "$1.8B", liq: "$24.5M", vol: "$89.2M", change: "+12.4%", positive: true, price: "0.00002847", supply: "56.2T", created: "2 yr ago", launchpad: "Bonk", holders: 835200, priceChanges: { m5: 0.3, h1: 2.1, h6: 5.8, h24: 12.4 }, dex: "raydium", headerUrl: null, imageUrl: null },
+  { ticker: "$WIF", name: "dogwifhat", ca: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", mcap: "$890M", fdv: "$890M", liq: "$18.3M", vol: "$52.1M", change: "+8.7%", positive: true, price: "2.34", supply: "998M", created: "1 yr ago", launchpad: "Meteora", holders: 218400, priceChanges: { m5: -0.4, h1: 1.8, h6: 4.2, h24: 8.7 }, dex: "meteora", headerUrl: null, imageUrl: null },
+  { ticker: "$POPCAT", name: "Popcat", ca: "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", mcap: "$540M", fdv: "$540M", liq: "$8.9M", vol: "$41.8M", change: "+31.2%", positive: true, price: "0.89", supply: "979M", created: "11 mo", launchpad: "Pump.fun", holders: 142800, priceChanges: { m5: 1.2, h1: 8.7, h6: 15.2, h24: 31.2 }, dex: "pump", headerUrl: null, imageUrl: null },
+  { ticker: "$JITO", name: "Jito", ca: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", mcap: "$2.1B", fdv: "$2.9B", liq: "$35.1M", vol: "$127M", change: "-3.2%", positive: false, price: "3.12", supply: "1B", created: "1.5 yr", launchpad: "—", holders: 94300, priceChanges: { m5: -0.8, h1: -1.5, h6: -2.1, h24: -3.2 }, dex: "raydium", headerUrl: null, imageUrl: null },
 ];
 
 // ═══ SVG ICONS (inline, no emoji) ═══
@@ -35,10 +39,11 @@ const Icon = ({ d, size = 14, color = "currentColor", style = {} }) => (
 );
 const Icons = {
   mic: "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8",
+  record: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
   rocket: "M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09zM12 15l-3-3M22 2l-7.5 7.5M9.5 2A18.4 18.4 0 0 0 2 9.5l4.5 4.5 8-8L19 2z",
   skull: "M9 12h.01M15 12h.01M12 2a8 8 0 0 0-8 8c0 3.2 1.9 6 4.6 7.3.3.1.4.4.4.7v2h6v-2c0-.3.2-.6.4-.7A8 8 0 0 0 12 2zM10 22v-2M14 22v-2",
   zap: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
-  copy: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2M9 2h6v4H9z",
+  copy: "M8 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M16 2h-8v0a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z",
   check: "M20 6L9 17l-5-5",
   users: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
   trending: "M23 6l-9.5 9.5-5-5L1 18",
@@ -60,6 +65,11 @@ const Icons = {
   compass: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36z",
   activity: "M22 12h-4l-3 9L9 3l-3 9H2",
   home: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  maximize: "M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3",
+  minimize: "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
+  trophy: "M8 21h8M12 17v4M17 3H7v5a5 5 0 0 0 10 0V3zM7 5H5a2 2 0 0 0 0 4h2M17 5h2a2 2 0 0 0 0 4h-2",
+  play: "M5 3l14 9-14 9V3z",
+  pause: "M6 4h4v16H6zM14 4h4v16h-4z",
 };
 
 // Generate fake but realistic chart data
@@ -83,8 +93,77 @@ function generateChart(positive, count = 48) {
   }
   return points;
 }
+function parseMcap(s) {
+  if (!s || s === "\u2014") return 0;
+  const n = parseFloat(s.replace(/[$,]/g, ""));
+  if (s.includes("B")) return n * 1e9;
+  if (s.includes("M")) return n * 1e6;
+  if (s.includes("K")) return n * 1e3;
+  return n;
+}
+
+// Format sub-penny degen prices: $0.00000712 → $0.0₅712
+function fmtPrice(raw) {
+  const n = typeof raw === "string" ? parseFloat(raw) : raw;
+  if (!n || !isFinite(n)) return "$0";
+  if (n >= 1) return "$" + n.toFixed(2);
+  if (n >= 0.01) return "$" + n.toFixed(4);
+  // Count leading zeros after "0."
+  const s = n.toFixed(20);
+  const afterDot = s.slice(2); // strip "0."
+  let zeros = 0;
+  for (let i = 0; i < afterDot.length; i++) { if (afterDot[i] === "0") zeros++; else break; }
+  const significant = afterDot.slice(zeros, zeros + 3).replace(/0+$/, "") || "0";
+  const sub = String(zeros).split("").map(d => "₀₁₂₃₄₅₆₇₈₉"[d]).join("");
+  return `$0.0${sub}${significant}`;
+}
+
 function generateAllTimeframes(positive) {
-  return { "1m": generateChart(positive, 48), "5m": generateChart(positive, 60), "1h": generateChart(positive, 36) };
+  return { "1m": generateChart(positive, 48), "5m": generateChart(positive, 60), "1h": generateChart(positive, 36), "1d": generateChart(positive, 24) };
+}
+
+function mergeCoinData(current, incoming) {
+  return {
+    ...current,
+    ...incoming,
+    ticker: incoming.ticker || current.ticker,
+    ca: incoming.ca || current.ca,
+    name: incoming.name || current.name || "",
+    mcap: incoming.mcap || current.mcap || "—",
+    fdv: incoming.fdv || current.fdv || incoming.mcap || current.mcap || "—",
+    liq: incoming.liq || current.liq || "—",
+    vol: incoming.vol || current.vol || "—",
+    change: incoming.change || current.change || "0.0%",
+    positive: incoming.positive ?? current.positive ?? true,
+    price: incoming.price || current.price || "0",
+    imageUrl: incoming.imageUrl || current.imageUrl || null,
+    pairUrl: incoming.pairUrl || current.pairUrl || null,
+    priceChanges: incoming.priceChanges || current.priceChanges || { m5: 0, h1: 0, h6: 0, h24: 0 },
+    dex: incoming.dex || current.dex || "—",
+    headerUrl: incoming.headerUrl || current.headerUrl || null,
+  };
+}
+
+function makeCoinRegistry(seedCoins) {
+  const registry = new Map();
+  seedCoins.forEach((coin) => {
+    if (!coin?.ca) return;
+    registry.set(coin.ca, mergeCoinData({}, coin));
+  });
+  return registry;
+}
+
+function findCoinInRegistry(registry, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) return null;
+
+  for (const coin of registry.values()) {
+    if (coin.ca?.toLowerCase() === normalizedQuery) return coin;
+    if (coin.ticker?.toLowerCase() === normalizedQuery) return coin;
+    if (coin.ticker?.toLowerCase() === `$${normalizedQuery.replace(/^\$/, "")}`) return coin;
+  }
+
+  return null;
 }
 
 // ═══ SHARED ANADOL GLSL ═══
@@ -152,7 +231,7 @@ function generateChars(count){
       chars.push({id:i,x,z,homeX:x,homeZ:z,hue:r()*360,bobSpeed:1.5+r()*1.5,
         bobOffset:r()*Math.PI*2,armPhase:r()*Math.PI*2,
         skinTone:[0.95,0.85,0.72,0.58,0.42,0.3][Math.floor(r()*6)],
-        name:PFP_NAMES[i % PFP_NAMES.length],visible:true});
+        name:PFP_NAMES[i % PFP_NAMES.length],visible:true,emoteTimer:0,emoteType:null});
     }
   }
   return chars;
@@ -161,6 +240,8 @@ function generateChars(count){
 // ═══ MINI CHART COMPONENT ═══
 function MiniChart({ data, positive, width = 280, height = 50 }) {
   const canvasRef = useRef(null);
+  const animRef = useRef(null);
+  const prevDataRef = useRef(null);
   useEffect(() => {
     const c = canvasRef.current; if (!c) return;
     const ctx = c.getContext("2d");
@@ -168,72 +249,121 @@ function MiniChart({ data, positive, width = 280, height = 50 }) {
     c.width = width * dpr; c.height = height * dpr;
     c.style.width = width + "px"; c.style.height = height + "px";
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, width, height);
 
+    const padX = 6, padY = 8;
+    const drawW = width - padX * 2, drawH = height - padY * 2;
     const min = Math.min(...data), max = Math.max(...data);
     const range = max - min || 1;
-    const pts = data.map((v, i) => ({
-      x: (i / (data.length - 1)) * width,
-      y: height - ((v - min) / range) * (height - 6) - 3,
+    const targetPts = data.map((v, i) => ({
+      x: padX + (i / (data.length - 1)) * drawW,
+      y: padY + drawH - ((v - min) / range) * drawH,
     }));
 
-    // Gradient fill
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    if (positive) {
-      grad.addColorStop(0, "rgba(0,255,136,0.25)");
-      grad.addColorStop(1, "rgba(0,255,136,0.0)");
-    } else {
-      grad.addColorStop(0, "rgba(255,68,68,0.25)");
-      grad.addColorStop(1, "rgba(255,68,68,0.0)");
-    }
+    // Spring animation — points bounce from flat/previous to target
+    const prevData = prevDataRef.current;
+    const startPts = targetPts.map((tp, i) => {
+      if (prevData && prevData.length === data.length) {
+        const pMin = Math.min(...prevData), pMax = Math.max(...prevData);
+        const pRange = pMax - pMin || 1;
+        return { x: tp.x, y: padY + drawH - ((prevData[i] - pMin) / pRange) * drawH };
+      }
+      return { x: tp.x, y: padY + drawH * 0.5 }; // start flat from center
+    });
+    prevDataRef.current = data;
 
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      const xc = (pts[i - 1].x + pts[i].x) / 2;
-      const yc = (pts[i - 1].y + pts[i].y) / 2;
-      ctx.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y, xc, yc);
-    }
-    ctx.quadraticCurveTo(pts[pts.length - 2].x, pts[pts.length - 2].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+    let startTime = null;
+    const DURATION = 600; // ms
+    if (animRef.current) cancelAnimationFrame(animRef.current);
 
-    // Fill under curve
-    ctx.lineTo(width, height);
-    ctx.lineTo(0, height);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
+    const draw = (progress) => {
+      // Spring easing — overshoot then settle
+      const t = Math.min(progress, 1);
+      const spring = t < 1 ? 1 - Math.pow(1 - t, 3) * Math.cos(t * Math.PI * 1.2) : 1;
 
-    // Stroke line
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      const xc = (pts[i - 1].x + pts[i].x) / 2;
-      const yc = (pts[i - 1].y + pts[i].y) / 2;
-      ctx.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y, xc, yc);
-    }
-    ctx.quadraticCurveTo(pts[pts.length - 2].x, pts[pts.length - 2].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
-    ctx.strokeStyle = positive ? "#00ff88" : "#ff4444";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+      ctx.clearRect(0, 0, width, height);
 
-    // Current price dot
-    const last = pts[pts.length - 1];
-    ctx.beginPath();
-    ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = positive ? "#00ff88" : "#ff4444";
-    ctx.fill();
+      // Subtle grid
+      ctx.strokeStyle = "rgba(255,255,255,0.02)";
+      ctx.lineWidth = 0.5;
+      for (let r = 0.25; r < 1; r += 0.25) {
+        ctx.beginPath(); ctx.moveTo(0, height * r); ctx.lineTo(width, height * r); ctx.stroke();
+      }
 
-    // Glow on dot
-    ctx.beginPath();
-    ctx.arc(last.x, last.y, 6, 0, Math.PI * 2);
-    ctx.fillStyle = positive ? "rgba(0,255,136,0.3)" : "rgba(255,68,68,0.3)";
-    ctx.fill();
+      // Interpolate points
+      const pts = targetPts.map((tp, i) => ({
+        x: tp.x,
+        y: startPts[i].y + (tp.y - startPts[i].y) * spring,
+      }));
+
+      const drawCurve = () => {
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          const xc = (pts[i - 1].x + pts[i].x) / 2;
+          const yc = (pts[i - 1].y + pts[i].y) / 2;
+          ctx.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y, xc, yc);
+        }
+        ctx.quadraticCurveTo(pts[pts.length - 2].x, pts[pts.length - 2].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+      };
+
+      // Gradient fill
+      const grad = ctx.createLinearGradient(0, 0, 0, height);
+      const alpha = 0.18 * spring;
+      if (positive) {
+        grad.addColorStop(0, `rgba(0,255,136,${alpha})`);
+        grad.addColorStop(0.6, `rgba(0,255,136,${alpha * 0.33})`);
+        grad.addColorStop(1, "rgba(0,255,136,0)");
+      } else {
+        grad.addColorStop(0, `rgba(255,68,68,${alpha})`);
+        grad.addColorStop(0.6, `rgba(255,68,68,${alpha * 0.33})`);
+        grad.addColorStop(1, "rgba(255,68,68,0)");
+      }
+      ctx.beginPath(); drawCurve();
+      ctx.lineTo(width, height); ctx.lineTo(0, height); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+
+      // Glow stroke
+      ctx.beginPath(); drawCurve();
+      ctx.strokeStyle = positive ? "rgba(0,255,136,0.12)" : "rgba(255,68,68,0.12)";
+      ctx.lineWidth = 4; ctx.stroke();
+
+      // Main stroke
+      ctx.beginPath(); drawCurve();
+      ctx.strokeStyle = positive ? "#00ff88" : "#ff4444";
+      ctx.lineWidth = 1.5; ctx.stroke();
+
+      // Current price dot + glow rings (pulse with spring)
+      const last = pts[pts.length - 1];
+      const dotScale = 0.5 + spring * 0.5;
+      ctx.beginPath(); ctx.arc(last.x, last.y, 8 * dotScale, 0, Math.PI * 2);
+      ctx.fillStyle = positive ? "rgba(0,255,136,0.1)" : "rgba(255,68,68,0.1)"; ctx.fill();
+      ctx.beginPath(); ctx.arc(last.x, last.y, 5 * dotScale, 0, Math.PI * 2);
+      ctx.fillStyle = positive ? "rgba(0,255,136,0.25)" : "rgba(255,68,68,0.25)"; ctx.fill();
+      ctx.beginPath(); ctx.arc(last.x, last.y, 2.5 * dotScale, 0, Math.PI * 2);
+      ctx.fillStyle = positive ? "#00ff88" : "#ff4444"; ctx.fill();
+
+      // Dashed price line
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(0, last.y); ctx.lineTo(last.x - 10, last.y);
+      ctx.strokeStyle = positive ? "rgba(0,255,136,0.08)" : "rgba(255,68,68,0.08)";
+      ctx.lineWidth = 0.5; ctx.stroke();
+      ctx.setLineDash([]);
+    };
+
+    const animate = (timestamp) => {
+      if (!startTime) startTime = timestamp;
+      const progress = (timestamp - startTime) / DURATION;
+      draw(progress);
+      if (progress < 1) animRef.current = requestAnimationFrame(animate);
+    };
+    animRef.current = requestAnimationFrame(animate);
+
+    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
   }, [data, positive, width, height]);
 
-  return <canvas ref={canvasRef} style={{ width, height, display: "block" }} />;
+  return <canvas ref={canvasRef} style={{ width, height, display: "block", borderRadius: 4 }} />;
 }
 
-export default function PodiumTeleport({ user, wallets }) {
+export default function PodiumTeleport({ user, wallets: _wallets }) {
   const mountRef = useRef(null);
   const stateRef = useRef({
     chars: generateChars(CHAR_COUNT), speaker: null,
@@ -247,53 +377,86 @@ export default function PodiumTeleport({ user, wallets }) {
     // Jumbotron debug params (live-tunable via GUI)
     jmboY: 6.9, jmboScale: 0.5, jmboRotSpeed: 0.0,
     // Speaker params
-    speakerScale: 2.2, speakerX: 0, speakerY: 1.2, speakerZ: 0, stageScale: 1.0, stageRotOffset: 0,
+    speakerScale: 1.8, speakerX: 0, speakerY: 1.2, speakerZ: 0, stageScale: 1.0, stageRotOffset: 0,
     // Mic stand params
-    micScale: 2.4, micY: 2.3, micZ: 2.1,
-    // Guitar params (held by speaker)
-    guitarScale: 1.35, guitarX: 0.05, guitarY: -0.25, guitarZ: -0.15, guitarRotX: 0.9584, guitarRotY: -0.391, guitarRotZ: -0.441,
+    micScale: 2.4, micY: 1.25, micZ: 2.1,
+    // DJ booth params
+    djScale: 0.45, djX: 0, djY: 2.35, djZ: 1.2, djRotY: -3.1415,
+    // DJ table params (butter slab under DJ booth)
+    dtW: 3.5, dtH: 0.35, dtD: 1.6, dtY: 2.2, dtZoff: -0.049,
+    // LED TV screen params
+    tvScale: 1.3, tvY: 3.8, tvZ: 1.2,
     // Jumbotron intro animation (Mario Party style)
     jmboIntroTimer: 0, jmboIntroName: "", jmboIntroTicker: "", jmboIntroCharIdx: -1,
     // Dome / sky (Anadol)
     domeHueShift: 0.62, domeSpeed: 0.01, domeIntensity: 0.5, domeBottomHalf: true,
     // Top calls leaderboard — prefilled for demo
     topCallsToday: [
-      { ticker: "$BONK", change: "+4.2x", caller: "whale_alert", followers: "127K", timeAgo: "12m ago", fdv: "$1.8B", price: "0.00002847" },
-      { ticker: "$WIF", change: "+2.8x", caller: "alpha_leak", followers: "45.2K", timeAgo: "28m ago", fdv: "$890M", price: "2.34" },
-      { ticker: "$POPCAT", change: "+1.6x", caller: "chad_caller", followers: "33.1K", timeAgo: "41m ago", fdv: "$540M", price: "0.89" },
+      { ticker: "$BONK", change: "+4.2x", caller: "zac", followers: "127K", timeAgo: "12m ago", fdv: "$1.8B", price: "0.00002847" },
+      { ticker: "$WIF", change: "+2.8x", caller: "jin", followers: "45.2K", timeAgo: "28m ago", fdv: "$890M", price: "2.34" },
+      { ticker: "$POPCAT", change: "+1.6x", caller: "rekt", followers: "33.1K", timeAgo: "41m ago", fdv: "$540M", price: "0.89" },
     ],
   });
   const rendererRef = useRef(null);
   const frameRef = useRef(null);
   const threeRef = useRef(null);
+  const viewerName = user?.username || user?.first_name || "you";
+  const coinRegistryRef = useRef(makeCoinRegistry(COINS));
+  const positionsRef = useRef([]);
 
   const [chatMessages, setChatMessages] = useState([
-    { user: "whale_alert", msg: "room is PACKED tonight 🔥" },
-    { user: "alpha_leak", msg: "who's stepping up?" },
-    { user: "diamond_hand", msg: "gm degens" },
+    { user: "frostyflakes", msg: "room is PACKED tonight 🔥" },
+    { user: "abhi", msg: "who's stepping up?" },
+    { user: "bandit", msg: "gm degens" },
   ]);
   const [chatInput, setChatInput] = useState("");
   const [liveCount, setLiveCount] = useState(CHAR_COUNT + 47);
   const [speakerInfo, setSpeakerInfo] = useState(null);
   const [chartData, setChartData] = useState(null);
-  const [chartTimeframe, setChartTimeframe] = useState("1m"); // "1m","5m","1h"
+  const [chartTimeframe, setChartTimeframe] = useState("1h"); // "1m","5m","1h"
   const chartTFDataRef = useRef({}); // { "1m": [...], "5m": [...], "1h": [...] }
-  const chartTFRef = useRef("1m");
+  const chartTFRef = useRef("1h");
   const [votes, setVotes] = useState({ up: 0, down: 0 });
   const [userVoted, setUserVoted] = useState(null);
-  const [teleportVFX, setTeleportVFX] = useState(null);
+  // Throw inventory — roses (bullish) & tomatoes (bearish), earned via trading + daily free
+  const [throwInv, setThrowInv] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("trench_throws") || "null");
+      const today = new Date().toDateString();
+      if (saved && saved.day === today) return saved;
+      return { roses: 3, tomatoes: 3, day: today };
+    } catch { return { roses: 3, tomatoes: 3, day: new Date().toDateString() }; }
+  });
+  const [tokenScores, setTokenScores] = useState({}); // { [ca]: { roses: N, tomatoes: N } }
+  const [, setTeleportVFX] = useState(null);
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
+
+  // Voice notes — hold-to-record
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const micHoldTimerRef = useRef(null);
+  const recordingTimerRef = useRef(null);
+  const recordingStartRef = useRef(0);
+  const voiceAudioRef = useRef(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [playingVoiceNote, setPlayingVoiceNote] = useState(null);
   const touchRef = useRef({ active: false, startX: 0, startY: 0, sa: 0, sh: 0, lastX: 0, lastY: 0, lastTime: 0, velX: 0, velY: 0 });
   const fpsBuf = useRef([]);
   const pfpImgsRef = useRef([]); // PFP images for announcements
+  const coinImgRef = useRef(null); // Loaded coin logo for jumbotron canvas
+  const headerImgRef = useRef(null); // Banner image for billboard main face
   // Refs for jumbotron (animate loop needs current values)
   const chartDataRef = useRef(null);
   const speakerInfoRef = useRef(null);
+  const selectedCoinRef = useRef(null);
   const votesRef = useRef({ up: 0, down: 0 });
   // Throwables — projectiles flying from crowd to speaker
   const throwablesRef = useRef([]); // { type:"tomato"|"diamond", pos:[x,y,z], vel:[x,y,z], life:0, maxLife:0.8 }
   const MAX_THROWABLES = 15;
+  const splatsRef = useRef([]); // { pos:[x,y,z], vel:[vx,vy,vz], life:0, maxLife:0.6 }
+  const MAX_SPLATS = 40;
 
   // Velvet curtain intro
   const [curtainsOpen, setCurtainsOpen] = useState(false);
@@ -310,7 +473,8 @@ export default function PodiumTeleport({ user, wallets }) {
     stateRef.current.introActive = true;
     stateRef.current.introTimer = 0;
     const timer = setTimeout(() => setHudVisible(true), 4500);
-    return () => clearTimeout(timer);
+    const consoleTimer = setTimeout(() => setConsoleRevealed(true), 5800); // Miyamoto entrance — 1.3s after HUD
+    return () => { clearTimeout(timer); clearTimeout(consoleTimer); };
   }, [curtainsOpen]);
 
   // ═══ FRONTRUN API — real wallet + trades ═══
@@ -330,65 +494,91 @@ export default function PodiumTeleport({ user, wallets }) {
       }
     }
     init();
+    // Fetch trending Solana tokens
+    fetchTrendingSolana().then((tokens) => { if (!dead && tokens.length) setTrendingTokens(tokens); }).catch(() => {});
+    const trendingIv = setInterval(() => {
+      fetchTrendingSolana().then((tokens) => { if (!dead && tokens.length) setTrendingTokens(tokens); }).catch(() => {});
+    }, 60000);
     // Refresh SOL price every 30s
     const priceIv = setInterval(async () => {
-      try { const p = await getSolPrice(); if (!dead) setSolPrice(p); } catch {}
+      try {
+        const p = await getSolPrice();
+        if (!dead) setSolPrice(p);
+      } catch (error) {
+        console.debug("[frontrun] price refresh skipped:", error.message);
+      }
     }, 30000);
     // WebSocket — real-time balance updates after trades
     connectWebSocket((data) => {
       if (dead) return;
       const newSol = parseInt(data.balance, 10) / 1e9;
       setWalletBalance(newSol);
+      if (Array.isArray(data.tokenBalances) && data.tokenBalances.length > 0) {
+        setUserPositions((prev) => prev.map((position) => {
+          const nextBalance = data.tokenBalances.find((tokenBalance) => tokenBalance.mint === position.mint);
+          if (!nextBalance) return position;
+
+          const uiAmount = Number.parseFloat(nextBalance.uiAmount);
+          return {
+            ...position,
+            tokenAmount: Number.isFinite(uiAmount) ? uiAmount : position.tokenAmount,
+            status: data.signature === position.txSig ? "confirmed" : position.status,
+          };
+        }));
+      }
       // Match pending trade signature
       if (pendingSigRef.current && data.signature === pendingSigRef.current) {
         setTradeStatus("confirmed");
         pendingSigRef.current = null;
+        setUserPositions((prev) => prev.map((position) => (
+          position.txSig === data.signature
+            ? { ...position, status: "confirmed" }
+            : position
+        )));
+        // Reward: +2 roses, +2 tomatoes for confirmed trade
+        setThrowInv(p => ({ ...p, roses: p.roses + 2, tomatoes: p.tomatoes + 2 }));
         // Auto-clear status after 3s
         setTimeout(() => setTradeStatus(null), 3000);
       }
     });
-    return () => { dead = true; clearInterval(priceIv); disconnectWebSocket(); };
+    return () => { dead = true; clearInterval(priceIv); clearInterval(trendingIv); disconnectWebSocket(); };
   }, []);
 
   // Thesis modal
-  const [showStepUpModal, setShowStepUpModal] = useState(false);
+  const [showCallInput, setShowCallInput] = useState(false);
   const [stepUpCA, setStepUpCA] = useState("");
-  const [stepUpThesis, setStepUpThesis] = useState("");
+  const [stepUpCoinPreview, setStepUpCoinPreview] = useState(null);
+  const [stepUpLookupLoading, setStepUpLookupLoading] = useState(false);
+  const stepUpLookupTimerRef = useRef(null);
   // Buy sheet
   const [showBuySheet, setShowBuySheet] = useState(false);
-  const [buyAmount, setBuyAmount] = useState("");
   const [walletBalance, setWalletBalance] = useState(0);
   const [solPrice, setSolPrice] = useState(180); // USD per SOL, fetched on mount
   const [tradeStatus, setTradeStatus] = useState(null); // null | "pending" | "confirmed" | "error"
   const [lastTxSig, setLastTxSig] = useState(null);
   const pendingSigRef = useRef(null);
-  // Queue — pre-seeded with 3 callers for demo rotation
-  const [queue, setQueue] = useState([
-    { name: "whale_alert", coin: COINS[1], thesis: "WIF is the cultural play. Disney of crypto. Every normie recognizes a dog in a hat. Easy 5x before EOY." },
-    { name: "alpha_leak", coin: COINS[2], thesis: "POPCAT just got listed on Bybit. Volume is insane. Cat meta is back and this leads the pack. Loading." },
-    { name: "chad_caller", coin: COINS[3], thesis: "JITO staking yields are mooning. Only liquid staking play on Solana with real revenue. Institutional grade." },
-  ]);
+  // Queue — populated from trending tokens once loaded
+  const [queue, setQueue] = useState([]);
   // Activity feed
   const [activityFeed, setActivityFeed] = useState([
-    { user: "sol_maxi", action: "bought", amount: "$200", coin: "$BONK" },
-    { user: "whale_alert", action: "up", amount: "340%", coin: "$WIF" },
-    { user: "diamond_hand", action: "bought", amount: "$1.2K", coin: "$WIF" },
+    { user: "ultra", action: "bought", amount: "$200", coin: "$BONK" },
+    { user: "phanes", action: "up", amount: "340%", coin: "$WIF" },
+    { user: "icobeast", action: "bought", amount: "$1.2K", coin: "$WIF" },
   ]);
   // Positions
   const [userPositions, setUserPositions] = useState([]);
   // Fee tracking — the flywheel (1% total, 50% back to caller)
   // Believe does 50-70% to creator. Bags does 50%. We do 50%.
   // Terminals (BullX/Axiom/Photon) give 0% — we're the anti-terminal.
-  const FEE_TOTAL = 0.01;     // 1% total fee on every trade
+  const _FEE_TOTAL = 0.01;    // 1% total fee on every trade
   const FEE_CALLER = 0.005;   // 0.5% → Caller (50% of fees — the flywheel)
   const FEE_PLATFORM = 0.004; // 0.4% → trench.fm
-  const FEE_TREASURY = 0.001; // 0.1% → Protocol treasury / referrals
+  const _FEE_TREASURY = 0.001; // 0.1% → Protocol treasury / referrals
   const [callerEarnings, setCallerEarnings] = useState({}); // { callerName: totalUSD }
   const [platformRevenue, setPlatformRevenue] = useState(0);
   const [callVolume, setCallVolume] = useState(0); // total volume through buy button
   // Speaker card expand + tabs
-  const [cardExpanded, setCardExpanded] = useState(false);
-  const [expandedTab, setExpandedTab] = useState("holders"); // "holders" | "traders" | "trades"
+  const [, setCardExpanded] = useState(false);
   // Privacy mode — hide your wallet from public trades feed
   const [privacyMode, setPrivacyMode] = useState(false);
   // Speaker screen position for 3D speech bubble
@@ -402,16 +592,100 @@ export default function PodiumTeleport({ user, wallets }) {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleTab, setConsoleTab] = useState("discover");
   const [consoleSearchQuery, setConsoleSearchQuery] = useState("");
-  // Quick buy bubble
-  const [quickBuyUSD, setQuickBuyUSD] = useState(null); // selected USD amount, null = none
+  const [searchResults, setSearchResults] = useState(null); // null = not searching, [] = no results
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedCoin, setSelectedCoin] = useState(null); // override speakerInfo.coin for buy
+  const [tokenHolders, setTokenHolders] = useState(null);
+  const [tokenTraders, setTokenTraders] = useState(null);
+  const [recentTrades, setRecentTrades] = useState(null);
+  const [trendingTokens, setTrendingTokens] = useState(null); // null = loading, [] = failed
+  const trendingEnrichedRef = useRef(false);
+  const rememberCoin = useCallback((coin) => {
+    if (!coin?.ca) return null;
+    const current = coinRegistryRef.current.get(coin.ca);
+    const merged = mergeCoinData(current || {}, coin);
+    coinRegistryRef.current.set(merged.ca, merged);
+    return merged;
+  }, []);
+  const rememberCoins = useCallback((coins) => coins.map((coin) => rememberCoin(coin)).filter(Boolean), [rememberCoin]);
+  const resolveCoin = useCallback(async (query) => {
+    const cached = findCoinInRegistry(coinRegistryRef.current, query);
+    if (cached) return cached;
+    try {
+      const liveCoin = await lookupToken(query);
+      return liveCoin ? rememberCoin(liveCoin) : null;
+    } catch (error) {
+      console.warn("[token] lookup failed:", error.message);
+      return null;
+    }
+  }, [rememberCoin]);
+  // Enrich trending tokens with DexScreener logos + seed demo callers
+  useEffect(() => {
+    if (!trendingTokens || trendingTokens.length < 4 || trendingEnrichedRef.current) return;
+    trendingEnrichedRef.current = true;
+    // Seed demo caller queue from top trending
+    const theses = [
+      (t) => `${t.ticker} is pumping hard. Volume is insane. Loading up heavy.`,
+      (t) => `${t.ticker} just broke out. Chart is textbook. This is the play right now.`,
+      (t) => `${t.ticker} fundamentals are unmatched. Accumulating before the masses catch on.`,
+    ];
+    setQueue([
+      { name: "biz", coin: trendingTokens[1], thesis: theses[0](trendingTokens[1]) },
+      { name: "skely", coin: trendingTokens[2], thesis: theses[1](trendingTokens[2]) },
+      { name: "Tintin", coin: trendingTokens[3], thesis: theses[2](trendingTokens[3]) },
+    ]);
+    // Enrich top 6 with DexScreener logos + banners (async, sequential)
+    (async () => {
+      let updated = false;
+      for (const token of trendingTokens.slice(0, 6)) {
+        if (token.imageUrl && token.headerUrl) continue;
+        try {
+          const match = await lookupToken(token.ca);
+          if (match?.imageUrl && !token.imageUrl) {
+            token.imageUrl = match.imageUrl;
+            updated = true;
+          }
+          if (match?.headerUrl && !token.headerUrl) {
+            token.headerUrl = match.headerUrl;
+            updated = true;
+          }
+          if (updated) rememberCoin({ ...token });
+        } catch {}
+      }
+      if (updated) setTrendingTokens(prev => prev ? [...prev] : null);
+    })();
+  }, [trendingTokens, rememberCoin]);
+  const searchTimerRef = useRef(null);
+  // Mini device
+  const [quickBuyUSD, setQuickBuyUSD] = useState(5);
+  const [buyConfirming, setBuyConfirming] = useState(false);
+  const buyConfirmTimer = useRef(null);
   const [caCopied, setCaCopied] = useState(false);
-  const copyCA = useCallback((e) => {
+  const [addrCopied, setAddrCopied] = useState(false);
+  const [fundStatus, setFundStatus] = useState(null); // null | "pending" | "sent" | "error"
+  const [miniTab, setMiniTab] = useState(null); // null until user picks — no false promises
+  const [miniOpen, setMiniOpen] = useState(false); // starts collapsed — surprise when they first open
+  const [consoleRevealed, setConsoleRevealed] = useState(false); // Miyamoto entrance — slides up after delay
+  const [miniSearch, setMiniSearch] = useState("");
+  const [miniExpanded, setMiniExpanded] = useState(false); // theater mode
+  const [homeSortMode, setHomeSortMode] = useState("trending"); // trending | gainers | volume | mcap
+  // Call tracking + anti-spam
+  const [callHistory, setCallHistory] = useState([]);
+  const [lastCallTime, setLastCallTime] = useState(0);
+  const [sessionCallCount, setSessionCallCount] = useState(0);
+  const CALL_COOLDOWN_MS = 5 * 60 * 1000; // 5 min between calls
+  const MAX_CALLS_PER_SESSION = 10;
+  const copyCA = useCallback((e, coinOverride) => {
     e.stopPropagation();
-    if (!speakerInfo) return;
-    navigator.clipboard.writeText(speakerInfo.coin.ca).catch(() => {});
+    const coin = coinOverride || selectedCoin || speakerInfo?.coin;
+    if (!coin?.ca) return;
+    navigator.clipboard.writeText(coin.ca).catch(() => {});
     setCaCopied(true);
     setTimeout(() => setCaCopied(false), 1500);
-  }, [speakerInfo]);
+  }, [selectedCoin, speakerInfo]);
+  useEffect(() => {
+    setCaCopied(false);
+  }, [selectedCoin, showBuySheet, speakerInfo?.coin?.ca]);
   // Reactions
   const [reactionBursts, setReactionBursts] = useState([]);
   const reactionTimerRef = useRef({ count: 0, lastReset: Date.now() });
@@ -419,8 +693,38 @@ export default function PodiumTeleport({ user, wallets }) {
   // Announcement overlay removed — jumbotron intro IS the announcement (Miyamoto principle)
 
   useEffect(() => {
+    positionsRef.current = userPositions;
+  }, [userPositions]);
+
+  useEffect(() => {
+    if (stepUpLookupTimerRef.current) clearTimeout(stepUpLookupTimerRef.current);
+    let active = true;
+
+    const query = stepUpCA.trim();
+    if (!query) {
+      setStepUpCoinPreview(null);
+      setStepUpLookupLoading(false);
+      return;
+    }
+
+    setStepUpLookupLoading(true);
+    stepUpLookupTimerRef.current = setTimeout(async () => {
+      const coin = await resolveCoin(query);
+      if (!active) return;
+      setStepUpCoinPreview(coin);
+      setStepUpLookupLoading(false);
+    }, 250);
+
+    return () => {
+      active = false;
+      if (stepUpLookupTimerRef.current) clearTimeout(stepUpLookupTimerRef.current);
+    };
+  }, [resolveCoin, stepUpCA]);
+
+  useEffect(() => {
     const i = setInterval(() => {
       const c = stateRef.current.chars[Math.floor(Math.random() * CHAR_COUNT)];
+      if (!c || !c.name) return;
       setChatMessages(p => [...p.slice(-25), { user: c.name, msg: CHAT_MSGS[Math.floor(Math.random() * CHAT_MSGS.length)] }]);
     }, 2200 + Math.random() * 2000);
     return () => clearInterval(i);
@@ -453,6 +757,7 @@ export default function PodiumTeleport({ user, wallets }) {
       throws.push({
         type, pos: [startX, startY, startZ], vel: [vx, vy, vz],
         life: 0, maxLife: flightTime,
+        spin: (Math.random() - 0.5) * 12, spinAxis: [Math.random()-0.5, Math.random()-0.5, Math.random()-0.5],
       });
     }
   }, []);
@@ -467,6 +772,15 @@ export default function PodiumTeleport({ user, wallets }) {
       // Spawn throwables from simulated crowd votes
       if (upAdd > 0) spawnThrow("diamond", 1);
       if (downAdd > 0) spawnThrow("tomato", 1);
+      // Trigger crowd emotes — random subset reacts
+      const chars = stateRef.current.chars;
+      const emoteType = upAdd > 0 ? "up" : "down";
+      const emoteCount = 3 + Math.floor(Math.random() * 8);
+      for (let e = 0; e < emoteCount; e++) {
+        const ci = Math.floor(Math.random() * chars.length);
+        chars[ci].emoteTimer = 1.2 + Math.random() * 0.5;
+        chars[ci].emoteType = emoteType;
+      }
       // Track vote rate for reaction bursts
       const rt = reactionTimerRef.current;
       rt.count += upAdd + downAdd;
@@ -489,9 +803,74 @@ export default function PodiumTeleport({ user, wallets }) {
 
   // Sync refs for jumbotron (animate loop reads these)
   useEffect(() => { chartDataRef.current = chartData; }, [chartData]);
+
+  // Fetch real chart data for a coin (falls back to fake data on failure)
+  const loadRealChart = useCallback(async (coin) => {
+    if (!coin?.ca) return;
+    let pool = coin.poolAddress;
+    if (!pool) { pool = await findPoolAddress(coin.ca); }
+    if (!pool) return; // keep fake data as fallback
+    const tfs = ["1m", "5m", "1h"];
+    const results = await Promise.all(tfs.map(tf => fetchTokenChart(pool, tf)));
+    const tfd = {};
+    tfs.forEach((tf, i) => { tfd[tf] = results[i] || chartTFDataRef.current[tf]; });
+    chartTFDataRef.current = tfd;
+    setChartData(tfd[chartTFRef.current]);
+  }, []);
+
+  // Fetch enriched token data (holders, traders, trades) when active coin changes
+  const enrichedMintRef = useRef(null);
+  useEffect(() => {
+    const activeCoin = selectedCoin || speakerInfo?.coin;
+    const mint = activeCoin?.ca;
+    if (!mint || mint === enrichedMintRef.current) return;
+    enrichedMintRef.current = mint;
+    setTokenHolders(null);
+    setTokenTraders(null);
+    setRecentTrades(null);
+    Promise.all([
+      fetchTokenHolders(mint),
+      fetchTokenTraders(mint),
+      fetchRecentTrades(mint),
+    ]).then(([holders, traders, trades]) => {
+      if (enrichedMintRef.current !== mint) return; // stale
+      setTokenHolders(holders);
+      setTokenTraders(traders);
+      setRecentTrades(trades);
+    });
+  }, [selectedCoin, speakerInfo]);
+
+  // Debounced token search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!consoleSearchQuery || consoleSearchQuery.length < 2) {
+      setSearchResults(null);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    searchTimerRef.current = setTimeout(async () => {
+      const results = await searchTokens(consoleSearchQuery);
+      if (results !== null) {
+        const mergedResults = rememberCoins(results);
+        startTransition(() => setSearchResults(mergedResults));
+        setSearchLoading(false);
+      }
+    }, 350);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [consoleSearchQuery, rememberCoins]);
   useEffect(() => {
     speakerInfoRef.current = speakerInfo;
     setBubbleExpanded(false);
+    // Coin image loading moved to selectedCoin sync effect below
+    // Load header/banner image for main face background
+    headerImgRef.current = null;
+    if (speakerInfo?.coin?.headerUrl) {
+      const himg = new Image();
+      himg.crossOrigin = "anonymous";
+      himg.onload = () => { headerImgRef.current = himg; };
+      himg.src = speakerInfo.coin.headerUrl;
+    }
     // Reset typewriter for new speaker
     setTypewriterIdx(0); setTypewriterDone(false);
     if (typewriterRef.current) clearInterval(typewriterRef.current);
@@ -512,6 +891,38 @@ export default function PodiumTeleport({ user, wallets }) {
     }, 6300); // 6s intro + 300ms buffer
     return () => { clearTimeout(startDelay); if (typewriterRef.current) clearInterval(typewriterRef.current); };
   }, [speakerInfo]);
+  // Sync jumbotron coin logo when user selects a different coin in console
+  // Uses fetch+blob to bypass CORS (DexScreener CDN doesn't send CORS headers)
+  const coinImgUrlRef = useRef(null);
+  useEffect(() => {
+    selectedCoinRef.current = selectedCoin;
+    const activeCoin = selectedCoin || speakerInfo?.coin;
+    const url = activeCoin?.imageUrl;
+    if (!url) { coinImgRef.current = null; coinImgUrlRef.current = null; return; }
+    if (coinImgUrlRef.current === url) return; // already loading/loaded this one
+    coinImgUrlRef.current = url;
+    coinImgRef.current = null;
+    // Fetch as blob → objectURL (same-origin, no canvas tainting)
+    fetch(url).then(r => r.blob()).then(blob => {
+      if (coinImgUrlRef.current !== url) return; // stale
+      const blobUrl = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { coinImgRef.current = img; };
+      img.onerror = () => URL.revokeObjectURL(blobUrl);
+      img.src = blobUrl;
+    }).catch(() => {});
+    // Also load header/banner image for jumbotron background
+    const headerUrl = activeCoin?.headerUrl;
+    if (headerUrl) {
+      const himg = new Image();
+      himg.crossOrigin = "anonymous";
+      himg.onload = () => { headerImgRef.current = himg; };
+      himg.onerror = () => {};
+      himg.src = headerUrl;
+    } else if (!speakerInfo?.coin?.headerUrl) {
+      headerImgRef.current = null;
+    }
+  }, [selectedCoin, speakerInfo]);
   // Timeframe switch — update chart from stored timeframe data
   useEffect(() => {
     chartTFRef.current = chartTimeframe;
@@ -527,16 +938,37 @@ export default function PodiumTeleport({ user, wallets }) {
     return () => clearInterval(iv);
   }, []);
   useEffect(() => { votesRef.current = votes; }, [votes]);
+  useEffect(() => { try { localStorage.setItem("trench_throws", JSON.stringify(throwInv)); } catch {} }, [throwInv]);
   const callerEarningsRef = useRef({});
   useEffect(() => { callerEarningsRef.current = callerEarnings; }, [callerEarnings]);
   const buyFlashRef = useRef(0); // time of last buy (for green flash VFX)
   const [floatingEmojis, setFloatingEmojis] = useState([]); // buy celebration particles
 
+  // Inject real CoinGecko trades into activity feed when available
+  useEffect(() => {
+    if (!recentTrades) return;
+    const trades = recentTrades?.data?.trades || recentTrades?.trades || [];
+    if (!trades.length) return;
+    const activeCoin = selectedCoin || speakerInfo?.coin;
+    const ticker = activeCoin?.ticker || "?";
+    const realItems = trades.slice(0, 8).map(t => {
+      const addr = t.maker_address || t.address || t.wallet || "";
+      const user = addr ? `${addr.slice(0, 4)}..${addr.slice(-3)}` : "anon";
+      const isBuy = (t.kind || t.type || t.side || "").toLowerCase().includes("buy");
+      const vol = parseFloat(t.volume_in_usd || t.amount_usd || t.usd || 0);
+      const amt = vol >= 1000 ? `$${(vol / 1000).toFixed(1)}K` : `$${vol.toFixed(0)}`;
+      return { user, action: isBuy ? "bought" : "sold", amount: amt, coin: ticker, real: true };
+    });
+    setActivityFeed(p => [...p.slice(-12), ...realItems]);
+  }, [recentTrades, selectedCoin, speakerInfo]);
+
   // Activity feed - mock events + fee flywheel simulation
   useEffect(() => {
     const i = setInterval(() => {
       const name = NAMES[Math.floor(Math.random() * NAMES.length)];
-      const coin = COINS[Math.floor(Math.random() * COINS.length)];
+      const coinPool = trendingTokens?.length ? trendingTokens : COINS;
+      if (!coinPool.length) return;
+      const coin = coinPool[Math.floor(Math.random() * coinPool.length)];
       const isBuy = Math.random() > 0.35;
       const tradeUSD = Math.random() * 2000 + 50;
       const amt = isBuy ? `$${tradeUSD.toFixed(0)}` : `${(Math.random() * 500 + 20).toFixed(0)}%`;
@@ -552,28 +984,31 @@ export default function PodiumTeleport({ user, wallets }) {
     return () => clearInterval(i);
   }, [speakerInfo]);
 
-  // Auto-trigger first caller on mount after a brief delay
+  // Auto-trigger first caller on mount — use trending if loaded, else COINS fallback
   const hasAutoStarted = useRef(false);
+  const trendingRef = useRef(null);
+  useEffect(() => { trendingRef.current = trendingTokens; }, [trendingTokens]);
   useEffect(() => {
     if (hasAutoStarted.current) return;
     hasAutoStarted.current = true;
     const timer = setTimeout(() => {
-      // Kick off the first caller automatically
       const st = stateRef.current;
-      const firstCoin = COINS[0];
+      const coins = trendingRef.current;
+      const firstCoin = rememberCoin(coins?.[0] || COINS[0]);
       const idx = st.chars.findIndex(c => c.name === "zac") ?? 0;
       const c = st.chars[idx];
+      if (!c) return;
       st.teleportCharIdx = idx;
       st.teleportPhase = "beam_out";
       st.teleportTimer = 0;
       setTeleportVFX("out");
       const txStats = { buys: 212, sells: 87, buyVol: "35.6", sellVol: "12.4", holders: 1855, topHolding: "27.8" };
       const charName = c.name;
-      setSpeakerInfo({ name: charName, coin: firstCoin, idx, thesis: "Bonk just flipped Myro. Dev shipping daily. Binance listing rumored. Easy 3x from here.", txStats, followers: "127K" });
+      const thesis = `${firstCoin.ticker} is pumping hard. Volume is insane. Loading up heavy.`;
+      setSpeakerInfo({ name: charName, coin: firstCoin, idx, thesis, txStats, followers: "127K", callMcap: firstCoin.mcap });
       setCardExpanded(false);
-      { const tfd = generateAllTimeframes(firstCoin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTimeframe]); }
+      { const tfd = generateAllTimeframes(firstCoin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTFRef.current]); loadRealChart(firstCoin); }
       setVotes({ up: 24, down: 3 });
-      // Jumbotron IS the announcement — start intro during teleport
       st.jmboIntroTimer = 6.0;
       st.jmboIntroName = charName;
       st.jmboIntroTicker = firstCoin.ticker;
@@ -581,7 +1016,7 @@ export default function PodiumTeleport({ user, wallets }) {
       setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ ${charName} is teleporting to the stage...` }]);
     }, 2000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [rememberCoin]);
 
   // Queue auto-advance: 45s per caller, countdown timer
   const SPEAKER_DURATION = 45; // seconds
@@ -625,7 +1060,9 @@ export default function PodiumTeleport({ user, wallets }) {
         st.topCallsToday = [callEntry, ...(st.topCallsToday || [])].slice(0, 3);
       }
       if (st.speaker !== null) chars_ref_restore(st);
-      const idx = Math.floor(Math.random() * st.chars.length);
+      // Match character to queued name, fallback to random
+      let idx = next.name ? st.chars.findIndex(c => c.name === next.name) : -1;
+      if (idx < 0) idx = Math.floor(Math.random() * st.chars.length);
       const c = st.chars[idx];
       st.teleportCharIdx = idx;
       st.teleportPhase = "beam_out";
@@ -633,9 +1070,9 @@ export default function PodiumTeleport({ user, wallets }) {
       setTeleportVFX("out");
       const txStats = { buys: Math.floor(80 + Math.random() * 200), sells: Math.floor(30 + Math.random() * 120), buyVol: (Math.random() * 80 + 10).toFixed(1), sellVol: (Math.random() * 50 + 5).toFixed(1), holders: Math.floor(500 + Math.random() * 3000), topHolding: (15 + Math.random() * 20).toFixed(1) };
       const followers = ["12.5K", "45.2K", "127K", "892K", "33.1K", "8.4K"][Math.floor(Math.random() * 6)];
-      setSpeakerInfo({ name: next.name || c.name, coin: next.coin, idx, thesis: next.thesis, txStats, followers });
+      setSpeakerInfo({ name: next.name || c.name, coin: next.coin, idx, thesis: next.thesis, txStats, followers, callMcap: next.coin.mcap });
       setCardExpanded(false);
-      { const tfd = generateAllTimeframes(next.coin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTimeframe]); }
+      { const tfd = generateAllTimeframes(next.coin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTFRef.current]); loadRealChart(next.coin); }
       setVotes({ up: Math.floor(Math.random() * 20) + 5, down: Math.floor(Math.random() * 5) });
       setUserVoted(null);
       // Jumbotron IS the announcement — start intro during teleport beam
@@ -655,11 +1092,10 @@ export default function PodiumTeleport({ user, wallets }) {
     if (!mountRef.current) return;
     const container = mountRef.current;
     function init() {
-      const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
       const isIPhone = /iPhone/i.test(navigator.userAgent);
       const w = container.clientWidth, h = container.clientHeight;
       const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-      renderer.setSize(w, h); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(w, h); renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1.5 : 2));
       renderer.setClearColor(0x0a0008);
       container.appendChild(renderer.domElement); rendererRef.current = renderer;
 
@@ -694,10 +1130,10 @@ export default function PodiumTeleport({ user, wallets }) {
             vec2 p=vec2(th*2.0,ph*3.0);
 
             // Triple-layer domain warping — deep organic complexity
-            float w1=domainWarp(p*0.35,t*0.7,${isMobile ? 3 : 5});
-            float w2=domainWarp(p*0.65+vec2(3.3,7.7),t*0.55,${isMobile ? 2 : 4});
+            float w1=domainWarp(p*0.35,t*0.7,${isMobile ? 2 : 3});
+            float w2=domainWarp(p*0.65+vec2(3.3,7.7),t*0.55,${isMobile ? 2 : 3});
             ${isMobile ? '' : 'float w3=domainWarp(p*1.1+vec2(11.1,4.4),t*0.9,3);'}
-            float w4=domainWarp(p*0.2+vec2(7.7,13.3),t*0.3,${isMobile ? 2 : 4});
+            float w4=domainWarp(p*0.2+vec2(7.7,13.3),t*0.3,${isMobile ? 2 : 2});
             float comp=(w1*0.35+w2*0.30+${isMobile ? '' : 'w3*0.20+'}w4*0.15)*0.5+0.5;
 
             // ═══ NEON ANADOL PALETTE — BRIGHT hot pink / electric cyan / lime ═══
@@ -730,7 +1166,7 @@ export default function PodiumTeleport({ user, wallets }) {
             col+=vec3(0.0,0.85,1.0)*edgeGl*0.10;
 
             // ═══ BLOOM — generous neon peaks ═══
-            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,${isMobile ? 2 : 3})*0.5+0.5),3.0);
+            float hs=pow(max(0.0,domainWarp(p*0.8+vec2(5.5,2.2),t*0.6,${isMobile ? 1 : 2})*0.5+0.5),3.0);
             col+=vec3(1.0,0.15,0.55)*hs*0.40;
             float hs2=pow(max(0.0,(1.0-comp)*w2*0.5+0.3),2.5);
             col+=vec3(0.1,0.75,1.0)*hs2*0.12;
@@ -780,10 +1216,11 @@ export default function PodiumTeleport({ user, wallets }) {
 
             // Absolute brightness floor — rich purple, never dark, extends fully to equator
             f=max(f,vec3(0.30,0.11,0.35));
+            f=min(f,vec3(1.0));
             gl_FragColor=vec4(f,1.0);
           }`,
       });
-      scene.add(new THREE.Mesh(new THREE.SphereGeometry(70, isMobile ? 24 : 32, isMobile ? 24 : 32), domeMat));
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(70, isMobile ? 16 : 20, isMobile ? 12 : 16), domeMat));
 
       // ═══ ANADOL FLOOR — synced with dome hue ═══
       const floorMat = new THREE.ShaderMaterial({
@@ -812,9 +1249,9 @@ export default function PodiumTeleport({ user, wallets }) {
           // Breathing sync
           float flBr=0.92+sin(uTime*uSpd*0.55)*0.08;
           float floorAlpha=smoothstep(28.0,20.0,d);
-          vec3 b=vec3(0.02,0.008,0.035);gl_FragColor=vec4(b+c*r*flBr+gridCol,floorAlpha);}`,
+          vec3 b=vec3(0.02,0.008,0.035);vec3 fCol=min(b+c*r*flBr+gridCol,vec3(1.0));gl_FragColor=vec4(fCol,floorAlpha);}`,
       });
-      const fg = new THREE.CircleGeometry(ROOM_RADIUS + 4, 48); fg.rotateX(-Math.PI / 2);
+      const fg = new THREE.CircleGeometry(ROOM_RADIUS + 4, 32); fg.rotateX(-Math.PI / 2);
       scene.add(new THREE.Mesh(fg, floorMat));
 
       // Walls removed — dome sphere covers everything beautifully
@@ -848,10 +1285,10 @@ export default function PodiumTeleport({ user, wallets }) {
             vec3 cyanEdge=vec3(0.0,0.7,1.0)*topGlow*0.15;
             float podBr=0.88+sin(t*0.55/0.2)*0.12;
             vec3 f=vec3(0.01,0.004,0.02)+c*i*podBr+bloom*topGlow*0.35+cyanEdge;
-            gl_FragColor=vec4(f,1.0);}`,
+            gl_FragColor=vec4(min(f,vec3(1.0)),1.0);}`,
         });
       }
-      function makeLEDWallShader() {
+      function _makeLEDWallShader() {
         return new THREE.ShaderMaterial({
           uniforms: { uTime: { value: 0 }, uHue: { value: 0 }, uSpd: { value: 0.2 } },
           transparent: true,
@@ -873,7 +1310,120 @@ export default function PodiumTeleport({ user, wallets }) {
             float grid=smoothstep(0.04,0.12,px.x)*smoothstep(0.04,0.12,px.y);
             c*=grid*0.85+0.15;
             float br=0.90+sin(t*0.55/0.2)*0.10;
-            gl_FragColor=vec4(c*(s*0.8+0.3)*br*1.3,1.0);}`,
+            gl_FragColor=vec4(min(c*(s*0.8+0.3)*br*1.3,vec3(1.0)),1.0);}`,
+        });
+      }
+
+      function makeTVShader() {
+        return new THREE.ShaderMaterial({
+          uniforms: { uTime: { value: 0 }, uHue: { value: 0 } },
+          vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+          fragmentShader: `uniform float uTime;uniform float uHue;varying vec2 vUv;${ANADOL_GLSL}
+            void main(){
+              float t=uTime;
+              // ═══ VJ MODE OSCILLATORS — continuously evolving parameters ═══
+              // Slow LFOs at irrational ratios → never repeats
+              float lfo1=sin(t*0.037)*0.5+0.5;  // ~27s cycle
+              float lfo2=sin(t*0.053)*0.5+0.5;  // ~19s
+              float lfo3=sin(t*0.071)*0.5+0.5;  // ~14s
+              float lfo4=sin(t*0.023)*0.5+0.5;  // ~43s
+              float lfo5=cos(t*0.041)*0.5+0.5;  // ~24s
+              // Hue complementary to venue — opposite side of color wheel + gentle drift
+              float ah=uHue+0.5+t*0.0083+lfo4*0.12;
+
+              // Barrel distortion — CRT curvature
+              vec2 uv=vUv-0.5;
+              float r2=dot(uv,uv);
+              uv*=1.0+r2*0.15;
+
+              // ═══ EVOLVING WARP — scale + speed modulated by LFOs ═══
+              float warpScale=2.0+lfo1*3.0;       // 2-5: tight tendrils ↔ sweeping clouds
+              float warpSpeed=0.3+lfo2*0.6;        // 0.3-0.9: slow drift ↔ rushing flow
+              float warpSeed=floor(t*0.02)*7.7;    // shift warp origin every ~50s
+              vec2 p=uv*warpScale;
+
+              float w1=domainWarp(p*0.45+vec2(1.1+warpSeed,2.2),t*warpSpeed*0.7,${isMobile ? 2 : 4});
+              float w2=domainWarp(p*0.7+vec2(6.6,3.3+warpSeed),t*warpSpeed*0.55,${isMobile ? 2 : 3});
+              float w3=domainWarp(p*0.25+vec2(9.9+warpSeed,14.1),t*warpSpeed*0.35,${isMobile ? 2 : 3});
+              float comp=(w1*0.4+w2*0.35+w3*0.25)*0.5+0.5;
+
+              // ═══ PALETTE BLEND — crossfade between 3 color moods ═══
+              // Mood A: Hot pink / magenta fire
+              vec3 palA=cosPal(w1*0.5+0.5+t*0.02,
+                vec3(0.45,0.08,0.35),vec3(0.55,0.12,0.45),vec3(0.8,0.4,0.9),
+                vec3(ah*0.3,0.08,0.15+ah*0.2));
+              // Mood B: Electric cyan / deep ocean
+              vec3 palB=cosPal(w2*0.5+0.5+t*0.015,
+                vec3(0.05,0.25,0.40),vec3(0.15,0.55,0.60),vec3(0.7,0.9,0.8),
+                vec3(0.7+ah*0.2,0.25,0.05));
+              // Mood C: Neon lime / acid green
+              vec3 palC=cosPal(w3*0.5+0.5+t*0.012,
+                vec3(0.05,0.30,0.05),vec3(0.15,0.65,0.12),vec3(0.5,1.0,0.4),
+                vec3(0.0,0.33+ah*0.2,0.67));
+              // Mood D: Gold / amber (warm accent)
+              vec3 palD=cosPal(comp+t*0.018,
+                vec3(0.50,0.35,0.05),vec3(0.45,0.35,0.10),vec3(0.9,0.7,0.3),
+                vec3(0.1,0.15+ah*0.1,0.7));
+
+              // LFO-driven palette weights — each mood rises and falls
+              float mA=0.3+lfo1*0.7;
+              float mB=0.3+lfo3*0.7;
+              float mC=0.2+lfo5*0.5;
+              float mD=lfo2*lfo4*0.4;
+              float maskA=smoothstep(0.1,0.6,w1*0.5+0.5);
+              float maskB=smoothstep(0.15,0.65,w2*0.5+0.5);
+              float maskC=pow(max(0.0,comp),3.0);
+              vec3 col=palA*maskA*mA+palB*maskB*mB+palC*maskC*mC+palD*maskC*mD;
+
+              // ═══ EVOLVING EFFECTS — intensity modulated by LFOs ═══
+              // Filament tendrils — sharpness varies
+              float ridgePow=2.0+lfo3*3.0; // 2-5
+              float ridge=pow(abs(w1*w2),ridgePow);
+              vec3 ridgeCol=mix(vec3(1.0,0.2,0.6),vec3(0.2,0.6,1.0),lfo4);
+              col+=ridgeCol*ridge*(0.10+lfo2*0.20);
+
+              // Edge glow — color shifts
+              float edgeDet=abs(comp-0.5)*2.0;
+              vec3 edgeCol=mix(vec3(0.0,0.85,1.0),vec3(1.0,0.3,0.8),lfo1);
+              col+=edgeCol*pow(1.0-edgeDet,2.5)*(0.06+lfo5*0.12);
+
+              // Bloom hotspots — position and color drift
+              float hs=pow(max(0.0,domainWarp(p*0.9+vec2(5.5+lfo4*3.0,2.2),t*warpSpeed*0.6,${isMobile ? 1 : 2})*0.5+0.5),3.0);
+              vec3 bloomCol=mix(vec3(1.0,0.15,0.55),vec3(0.1,1.0,0.6),lfo3);
+              col+=bloomCol*hs*(0.20+lfo1*0.25);
+
+              // Secondary bloom
+              float hs2=pow(max(0.0,(1.0-comp)*w2*0.5+0.3),2.5);
+              col+=vec3(0.1,0.75,1.0)*hs2*(0.08+lfo2*0.12);
+
+              // Iridescent shimmer — intensity breathes
+              vec3 iri=cosPal(comp*2.0+t*0.01,
+                vec3(0.50,0.15,0.50),vec3(0.45,0.30,0.50),vec3(1.0,0.8,1.0),
+                vec3(ah*0.3,0.5+ah*0.2,0.15+ah*0.3));
+              col=mix(col,col+iri*(0.10+lfo4*0.15),smoothstep(0.35,0.75,comp));
+
+              // Micro grain
+              float gr=snoise(p*15.0+t*0.4)*0.5+0.5;
+              col*=(0.92+gr*0.16);
+
+              // ═══ TV EFFECTS ═══
+              float scan=sin(vUv.y*256.0+t*3.0)*0.04+0.96;
+              col*=scan;
+              vec2 px=fract(vUv*vec2(192.0,108.0));
+              float grid=smoothstep(0.03,0.10,px.x)*smoothstep(0.03,0.10,px.y);
+              col*=grid*0.88+0.12;
+              col+=col*dot(col,vec3(0.33))*0.1;
+
+              // Vignette
+              float vig=1.0-r2*2.5;
+              col*=clamp(vig,0.0,1.0)*0.7+0.3;
+
+              // Deep purple shadows
+              col+=vec3(0.12,0.03,0.20)*pow(1.0-comp,2.0)*0.45;
+
+              // Breathing
+              col*=(0.90+sin(t*0.55)*0.10)*1.3;
+              gl_FragColor=vec4(min(col,vec3(1.0)),1.0);}`,
         });
       }
 
@@ -885,25 +1435,25 @@ export default function PodiumTeleport({ user, wallets }) {
       const podMat = makePodiumShader();
       stageMats.push(podMat);
       const podium = new THREE.Mesh(
-        new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, 32),
+        new THREE.CylinderGeometry(PODIUM_RADIUS, PODIUM_RADIUS + 0.4, 1.2, isMobile ? 16 : 24),
         podMat);
       podium.position.y = 0.6;
       stageGroup.add(podium);
 
       // Glowing edge rings — cyan bottom, pink top
-      const ringGeo = new THREE.TorusGeometry(PODIUM_RADIUS + 0.1, 0.04, 8, 48);
+      const ringGeo = new THREE.TorusGeometry(PODIUM_RADIUS + 0.1, 0.04, 8, 24);
       const cyanRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x00d4ff }));
       cyanRing.rotation.x = Math.PI / 2; cyanRing.position.y = 0.08;
       stageGroup.add(cyanRing);
       const pinkRing = new THREE.Mesh(
-        new THREE.TorusGeometry(PODIUM_RADIUS - 0.1, 0.035, 8, 48),
+        new THREE.TorusGeometry(PODIUM_RADIUS - 0.1, 0.035, 8, 24),
         new THREE.MeshBasicMaterial({ color: 0xff2d78 }));
       pinkRing.rotation.x = Math.PI / 2; pinkRing.position.y = 1.2;
       stageGroup.add(pinkRing);
 
       // Inner accent ring at mid-height
       const midRing = new THREE.Mesh(
-        new THREE.TorusGeometry(PODIUM_RADIUS + 0.25, 0.025, 6, 48),
+        new THREE.TorusGeometry(PODIUM_RADIUS + 0.25, 0.025, 6, 24),
         new THREE.MeshBasicMaterial({ color: 0x8844ff, transparent: true, opacity: 0.6 }));
       midRing.rotation.x = Math.PI / 2; midRing.position.y = 0.6;
       stageGroup.add(midRing);
@@ -1015,10 +1565,10 @@ export default function PodiumTeleport({ user, wallets }) {
       const jmboBotFaces = [botFront, botBack, botLeft, botRight];
 
       // Top ribbon strips — tall canvas for big text
-      const topFront = makeScreenFace(faceW, topH, 1024, 480, 0.005);
-      const topBack  = makeScreenFace(faceW, topH, 1024, 480, 0.005);
-      const topLeft  = makeScreenFace(faceW, topH, 1024, 480, 0.005);
-      const topRight = makeScreenFace(faceW, topH, 1024, 480, 0.005);
+      const topFront = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topBack  = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topLeft  = makeScreenFace(faceW, topH, 1024, 200, 0.005);
+      const topRight = makeScreenFace(faceW, topH, 1024, 200, 0.005);
       const jmboTopFaces = [topFront, topBack, topLeft, topRight];
 
       // Assemble into group — square box, faces at halfD from center
@@ -1085,7 +1635,8 @@ export default function PodiumTeleport({ user, wallets }) {
       jmboGroup.rotation.y = 0;
       scene.add(jmboGroup);
 
-      // ═══ CLUB SPEAKERS — horizontal line arrays hanging from jumbotron ═══
+      // ═══ CLUB SPEAKERS — horizontal line arrays hanging from jumbotron (desktop only) ═══
+      if (!isMobile) {
       function makeLineArraySpeaker(unitCount) {
         const spkGroup = new THREE.Group();
         const unitW = 3.2, unitH = 0.55, unitD = 0.8; // wide, short, shallow — line array style
@@ -1151,6 +1702,7 @@ export default function PodiumTeleport({ user, wallets }) {
         spk.rotation.y = 0;
         jmboGroup.add(spk);
       });
+      } // end !isMobile speakers
 
       // ═══ TELEPORT BEAM VFX ═══
       // Vertical beam cylinder (scales up/down during teleport)
@@ -1292,7 +1844,7 @@ export default function PodiumTeleport({ user, wallets }) {
       bodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(bodies);
 
       // PFP atlas — procedural fallback, then real TG/X profile pics
-      const PFP_FILES = ["AzFlin.jpg","biz.jpg","ferengi.jpg","frostyflakes.jpg","icobeast.jpg","jin.jpg","phanes.jpg","pupul.jpg","rekt.jpg","rob.jpg","shinkiro14.jpg","skely.jpg","Tintin.jpg","ultra.png","vn.jpg","zac.jpg"];
+      const PFP_FILES = ["abhi.jpg","AzFlin.jpg","bandit.jpg","biz.jpg","ferengi.jpg","frostyflakes.jpg","icobeast.jpg","jin.jpg","phanes.jpg","pupul.jpg","rekt.jpg","rob.jpg","shinkiro14.jpg","skely.jpg","Tintin.jpg","ultra.png","vn.jpg","zac.jpg"];
       const A = 2048, P = 64, CO = A / P;
       const ac = document.createElement("canvas"); ac.width = ac.height = A;
       const ax = ac.getContext("2d");
@@ -1335,7 +1887,7 @@ export default function PodiumTeleport({ user, wallets }) {
       });
 
       // Head — 3D sphere with PFP mapped via matcap projection
-      const headGeo = new THREE.InstancedBufferGeometry().copy(new THREE.SphereGeometry(0.34, 16, 16));
+      const headGeo = new THREE.InstancedBufferGeometry().copy(new THREE.SphereGeometry(0.34, isMobile ? 8 : 12, isMobile ? 6 : 10));
       const uo = new Float32Array(count * 2), us = new Float32Array(count * 2);
       for (let i = 0; i < count; i++) { uo[i * 2] = (i % CO) / CO; uo[i * 2 + 1] = 1 - (Math.floor(i / CO) + 1) / CO; us[i * 2] = 1 / CO; us[i * 2 + 1] = 1 / CO; }
       headGeo.setAttribute("uvO", new THREE.InstancedBufferAttribute(uo, 2));
@@ -1447,6 +1999,75 @@ export default function PodiumTeleport({ user, wallets }) {
       const zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
       for (let i = 0; i < MAX_THROWABLES; i++) { tomatoMeshes.setMatrixAt(i, zeroMat); diamondMeshes.setMatrixAt(i, zeroMat); }
       scene.add(tomatoMeshes); scene.add(diamondMeshes);
+      // Splat particles — small flat circles that burst on tomato impact
+      const splatGeo = new THREE.CircleGeometry(0.06, 6);
+      const splatMat = new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
+      const splatMeshes = new THREE.InstancedMesh(splatGeo, splatMat, MAX_SPLATS);
+      splatMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      for (let i = 0; i < MAX_SPLATS; i++) splatMeshes.setMatrixAt(i, zeroMat);
+      scene.add(splatMeshes);
+
+      // Load tomato.glb → swap instanced mesh with real tomato geometry
+      new GLTFLoader().load("/3d/tomato.glb", (gltf) => {
+        let tGeo = null, tMatSrc = null;
+        gltf.scene.traverse(child => {
+          if (child.isMesh && !tGeo) { tGeo = child.geometry.clone(); tMatSrc = child.material; }
+        });
+        if (!tGeo) return;
+        // Scale geometry down to throwable size (~0.12 unit radius like the original sphere)
+        tGeo.computeBoundingBox();
+        const bb = tGeo.boundingBox;
+        const extent = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+        const targetSize = 0.24; // diameter — same scale as the old sphere (radius 0.12)
+        if (extent > 0) tGeo.scale(targetSize / extent, targetSize / extent, targetSize / extent);
+        if (tMatSrc) {
+          if (tMatSrc.map) { tMatSrc.emissiveMap = tMatSrc.map; tMatSrc.emissive = new THREE.Color(1, 1, 1); tMatSrc.emissiveIntensity = 0.6; }
+          tMatSrc.metalness = 0.3; tMatSrc.roughness = 0.5; tMatSrc.needsUpdate = true;
+        }
+        const newMesh = new THREE.InstancedMesh(tGeo, tMatSrc || tomatoMat, MAX_THROWABLES);
+        newMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        const z = new THREE.Matrix4().makeScale(0, 0, 0);
+        for (let i = 0; i < MAX_THROWABLES; i++) newMesh.setMatrixAt(i, z);
+        scene.remove(tomatoMeshes);
+        scene.add(newMesh);
+        threeRef.current.tomatoMeshes = newMesh;
+      });
+
+      // Load rose.glb → swap diamond instanced mesh with real rose geometry
+      new GLTFLoader().load("/3d/rose.glb", (gltf) => {
+        let rGeo = null, rMatSrc = null;
+        gltf.scene.traverse(child => {
+          if (child.isMesh && !rGeo) { rGeo = child.geometry.clone(); rMatSrc = child.material; }
+        });
+        if (!rGeo) return;
+        rGeo.computeBoundingBox();
+        const bb = rGeo.boundingBox;
+        const extent = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+        const targetSize = 0.24;
+        if (extent > 0) rGeo.scale(targetSize / extent, targetSize / extent, targetSize / extent);
+        if (rMatSrc) {
+          if (rMatSrc.map) { rMatSrc.emissiveMap = rMatSrc.map; rMatSrc.emissive = new THREE.Color(1, 1, 1); rMatSrc.emissiveIntensity = 0.6; }
+          rMatSrc.metalness = 0.3; rMatSrc.roughness = 0.5; rMatSrc.needsUpdate = true;
+        }
+        const newMesh = new THREE.InstancedMesh(rGeo, rMatSrc || diamondMat, MAX_THROWABLES);
+        newMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        const z = new THREE.Matrix4().makeScale(0, 0, 0);
+        for (let i = 0; i < MAX_THROWABLES; i++) newMesh.setMatrixAt(i, z);
+        scene.remove(diamondMeshes);
+        scene.add(newMesh);
+        threeRef.current.diamondMeshes = newMesh;
+      });
+
+      // ═══ CROWD EMOTES — small colored circles that pop above heads ═══
+      const emoteGeo = new THREE.PlaneGeometry(0.22, 0.22);
+      const emoteUpMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false });
+      const emoteDownMat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false });
+      const emoteUpMeshes = new THREE.InstancedMesh(emoteGeo, emoteUpMat, count);
+      const emoteDownMeshes = new THREE.InstancedMesh(emoteGeo, emoteDownMat, count);
+      emoteUpMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      emoteDownMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      for (let i = 0; i < count; i++) { emoteUpMeshes.setMatrixAt(i, zeroMat); emoteDownMeshes.setMatrixAt(i, zeroMat); }
+      scene.add(emoteUpMeshes); scene.add(emoteDownMeshes);
 
       const sg = new THREE.Group(); sg.visible = false; sg.position.set(0, 1.2, 0);
       // Head — BIG sphere with PFP mapped via matcap (Nintendo: head = 40% of character)
@@ -1520,27 +2141,100 @@ export default function PodiumTeleport({ user, wallets }) {
       slr.position.set(0.18, 0.6, 0); sg.add(slr);
       scene.add(sg);
 
-      // ═══ GUITAR — held by speaker, positioned relative to speaker on stage ═══
-      new GLTFLoader().load("/3d/guitar.glb", (gltf) => {
-        const guitar = gltf.scene;
-        // Self-illuminate like the mic
-        guitar.traverse(child => {
-          if (child.isMesh && child.material) {
+      // ═══ DJ BOOTH — loaded from dj.glb, Anadol shader on table ═══
+      new GLTFLoader().load("/3d/djset.glb", (gltf) => {
+        const djGroup = gltf.scene;
+        djGroup.traverse(child => {
+          if (!child.isMesh || !child.material) return;
+          const n = (child.name || "").toLowerCase();
+          const geo = child.geometry;
+          // Heuristic: large box-like mesh = table body → Anadol shader
+          if (/table|desk|console|body|booth/.test(n) || (!n && geo && geo.boundingBox === null && (geo.computeBoundingBox(), true) && geo.boundingBox && (geo.boundingBox.max.x - geo.boundingBox.min.x) > 0.5 && (geo.boundingBox.max.z - geo.boundingBox.min.z) > 0.3)) {
+            const podShader = makePodiumShader();
+            stageMats.push(podShader);
+            child.material = podShader;
+          } else if (/speaker|cabinet|stack|woofer/.test(n)) {
+            child.material = new THREE.MeshStandardMaterial({ color: 0x1a0e28, metalness: 0.85, roughness: 0.2 });
+          } else if (/cyan|led|strip|glow/.test(n) && !/pink|red/.test(n)) {
+            child.material = new THREE.MeshBasicMaterial({ color: 0x00d4ff });
+          } else if (/pink|red|strip/.test(n) && !/cyan/.test(n)) {
+            child.material = new THREE.MeshBasicMaterial({ color: 0xff2d78 });
+          } else if (/screen|display|monitor/.test(n)) {
+            // Skip — standalone LED screen built separately
+            child.visible = false;
+          } else {
+            // Self-illuminate fallback (like mic pattern)
             const m = child.material;
-            if (m.map) {
-              m.emissiveMap = m.map;
-              m.emissive = new THREE.Color(1, 1, 1);
-              m.emissiveIntensity = 0.6;
-            }
-            m.metalness = 0.3;
-            m.roughness = 0.5;
-            m.needsUpdate = true;
+            if (m.map) { m.emissiveMap = m.map; m.emissive = new THREE.Color(1, 1, 1); m.emissiveIntensity = 0.6; }
+            m.metalness = 0.3; m.roughness = 0.5; m.needsUpdate = true;
           }
         });
-        guitar.visible = false; // shown only when speaker is active
-        scene.add(guitar);
-        threeRef.current.guitarMesh = guitar;
+        const dst = stateRef.current;
+        djGroup.position.set(dst.djX, dst.djY, dst.djZ);
+        djGroup.scale.setScalar(dst.djScale);
+        scene.add(djGroup);
+        threeRef.current.djBooth = djGroup;
       });
+
+      // ═══ DJ TABLE — butter-slab Anadol table with corner posts ═══
+      {
+        const tableMat = makePodiumShader();
+        stageMats.push(tableMat);
+        // Unit box — scaled via stateRef params in animate loop
+        const tableMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), tableMat);
+        const tableGroup = new THREE.Group();
+        tableGroup.add(tableMesh);
+        // Corner posts — cyan glow pillars at each corner (legs)
+        const postMat = new THREE.MeshBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.7 });
+        const postGeo = new THREE.CylinderGeometry(0.04, 0.04, 1, 6);
+        const posts = [];
+        for (let i = 0; i < 4; i++) {
+          const post = new THREE.Mesh(postGeo, postMat);
+          tableGroup.add(post);
+          posts.push(post);
+        }
+        // Pink edge trim on the top surface
+        const trimMat = new THREE.MeshBasicMaterial({ color: 0xff2d78, transparent: true, opacity: 0.5 });
+        const trimMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), trimMat);
+        tableGroup.add(trimMesh);
+        scene.add(tableGroup);
+        var djTable = { group: tableGroup, mesh: tableMesh, posts, trimMesh };
+      }
+
+      // ═══ LED SCREEN — GLSL Anadol shader art + canvas overlay for intros ═══
+      {
+        const tvMat = makeTVShader();
+        // NOT pushed to stageMats — TV runs on its own clock, not dome speed
+        const ledShaderMesh = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 2.5, 1, 1), tvMat);
+        // Canvas overlay — sits in front, shown only during intros
+        const LED_W = 1024, LED_H = 512;
+        const ledCanvas = document.createElement("canvas");
+        ledCanvas.width = LED_W; ledCanvas.height = LED_H;
+        const ledCtx = ledCanvas.getContext("2d");
+        ledCtx.fillStyle = "#08041a"; ledCtx.fillRect(0, 0, LED_W, LED_H);
+        const ledTex = new THREE.CanvasTexture(ledCanvas);
+        ledTex.minFilter = THREE.LinearFilter;
+        const ledOverlay = new THREE.Mesh(
+          new THREE.PlaneGeometry(4.5, 2.5),
+          new THREE.MeshBasicMaterial({ map: ledTex, transparent: true }));
+        ledOverlay.position.z = 0.01; // just in front of shader
+        ledOverlay.visible = false;
+        // Frame border — dark purple with pink edge glow
+        const frame = new THREE.Mesh(
+          new THREE.BoxGeometry(4.7, 2.7, 0.08),
+          new THREE.MeshStandardMaterial({ color: 0x1a0e28, metalness: 0.85, roughness: 0.2 }));
+        frame.position.z = -0.05;
+        // Pink edge glow strip
+        const edge = new THREE.Mesh(
+          new THREE.BoxGeometry(4.8, 2.8, 0.02),
+          new THREE.MeshBasicMaterial({ color: 0xff2d78, transparent: true, opacity: 0.6 }));
+        edge.position.z = -0.09;
+        const ledGroup = new THREE.Group();
+        ledGroup.add(ledShaderMesh); ledGroup.add(ledOverlay); ledGroup.add(frame); ledGroup.add(edge);
+        ledGroup.position.set(0, 3.5, -(PODIUM_RADIUS + 0.5));
+        scene.add(ledGroup);
+        var ledScreen = { mesh: ledGroup, overlay: ledOverlay, canvas: ledCanvas, ctx: ledCtx, tex: ledTex, tvMat };
+      }
 
       // Reusable vectors for per-frame jumbotron auto-positioning
       const _pv1 = new THREE.Vector3();
@@ -1552,11 +2246,11 @@ export default function PodiumTeleport({ user, wallets }) {
         beam, beamMat, burst, burstMat, tpParts, tpMat, tpPos, tpVel,
         ppArr, ppLife, ppGeo, pp2Arr, pp2Life, pp2Geo,
         bodyMat, armMat, legMat,
-        jmboGroup, jmboFaces, jmboBotFaces, jmboTopFaces, tomatoMeshes, diamondMeshes,
-        lasers, laserGroup, stageGroup, stageMats };
+        jmboGroup, jmboFaces, jmboBotFaces, jmboTopFaces, tomatoMeshes, diamondMeshes, splatMeshes, emoteUpMeshes, emoteDownMeshes,
+        lasers, laserGroup, stageGroup, stageMats, ledScreen, djTable };
 
       // ═══ DEBUG GUI — only visible with ?debug in URL ═══
-      const showDebug = window.location.search.includes("debug");
+      const showDebug = window.location.search.toLowerCase().includes("debug");
       if (showDebug) {
         const gui = new GUI({ title: "Stage Controls" });
         gui.domElement.style.position = "fixed";
@@ -1592,21 +2286,29 @@ export default function PodiumTeleport({ user, wallets }) {
         mf.add(guiObj, "MicScale", 0.1, 5, 0.05).onChange(v => { stateRef.current.micScale = v; });
         mf.add(guiObj, "MicY", 0, 5, 0.05).onChange(v => { stateRef.current.micY = v; });
         mf.add(guiObj, "MicZ", -3, 5, 0.05).onChange(v => { stateRef.current.micZ = v; });
-        const gf = gui.addFolder("Guitar");
-        guiObj.GuitarScale = st2.guitarScale;
-        guiObj.GuitarX = st2.guitarX;
-        guiObj.GuitarY = st2.guitarY;
-        guiObj.GuitarZ = st2.guitarZ;
-        guiObj.GuitarRotX = st2.guitarRotX;
-        guiObj.GuitarRotY = st2.guitarRotY;
-        guiObj.GuitarRotZ = st2.guitarRotZ;
-        gf.add(guiObj, "GuitarScale", 0.1, 5, 0.05).onChange(v => { stateRef.current.guitarScale = v; });
-        gf.add(guiObj, "GuitarX", -3, 3, 0.05).onChange(v => { stateRef.current.guitarX = v; });
-        gf.add(guiObj, "GuitarY", -2, 5, 0.05).onChange(v => { stateRef.current.guitarY = v; });
-        gf.add(guiObj, "GuitarZ", -3, 3, 0.05).onChange(v => { stateRef.current.guitarZ = v; });
-        gf.add(guiObj, "GuitarRotX", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotX = v; });
-        gf.add(guiObj, "GuitarRotY", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotY = v; });
-        gf.add(guiObj, "GuitarRotZ", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.guitarRotZ = v; });
+        const gf = gui.addFolder("DJ Booth");
+        guiObj.DJScale = st2.djScale;
+        guiObj.DJX = st2.djX;
+        guiObj.DJY = st2.djY;
+        guiObj.DJZ = st2.djZ;
+        guiObj.DJRotY = st2.djRotY;
+        gf.add(guiObj, "DJScale", 0.1, 5, 0.05).onChange(v => { stateRef.current.djScale = v; });
+        gf.add(guiObj, "DJX", -3, 3, 0.05).onChange(v => { stateRef.current.djX = v; });
+        gf.add(guiObj, "DJY", -2, 5, 0.05).onChange(v => { stateRef.current.djY = v; });
+        gf.add(guiObj, "DJZ", -3, 3, 0.05).onChange(v => { stateRef.current.djZ = v; });
+        gf.add(guiObj, "DJRotY", -Math.PI, Math.PI, 0.05).onChange(v => { stateRef.current.djRotY = v; });
+        const tf = gui.addFolder("DJ Table");
+        guiObj.DTW = st2.dtW; guiObj.DTH = st2.dtH; guiObj.DTD = st2.dtD; guiObj.DTY = st2.dtY; guiObj.DTZoff = st2.dtZoff;
+        tf.add(guiObj, "DTW", 0.5, 8, 0.1).onChange(v => { stateRef.current.dtW = v; }).name("Width");
+        tf.add(guiObj, "DTH", 0.05, 2, 0.05).onChange(v => { stateRef.current.dtH = v; }).name("Height");
+        tf.add(guiObj, "DTD", 0.3, 5, 0.1).onChange(v => { stateRef.current.dtD = v; }).name("Depth");
+        tf.add(guiObj, "DTY", 0, 5, 0.05).onChange(v => { stateRef.current.dtY = v; }).name("Y Pos");
+        tf.add(guiObj, "DTZoff", -3, 3, 0.05).onChange(v => { stateRef.current.dtZoff = v; }).name("Z Offset");
+        const tvf = gui.addFolder("LED TV");
+        guiObj.TVScale = st2.tvScale; guiObj.TVY = st2.tvY; guiObj.TVZ = st2.tvZ;
+        tvf.add(guiObj, "TVScale", 0.1, 3, 0.05).onChange(v => { stateRef.current.tvScale = v; }).name("Scale");
+        tvf.add(guiObj, "TVY", 0, 8, 0.05).onChange(v => { stateRef.current.tvY = v; }).name("Y Pos");
+        tvf.add(guiObj, "TVZ", -3, 5, 0.05).onChange(v => { stateRef.current.tvZ = v; }).name("Z Offset");
         const df = gui.addFolder("Stage Model");
         guiObj.StageScale = st2.stageScale || 1.0;
         guiObj.StageRotOffset = st2.stageRotOffset || 0;
@@ -1626,6 +2328,19 @@ export default function PodiumTeleport({ user, wallets }) {
       // ═══ RENDER ═══
       const dm = new THREE.Matrix4(); const pos = new THREE.Vector3();
       const q = new THREE.Quaternion(); const sc = new THREE.Vector3(1, 1, 1);
+      const zAxis = new THREE.Vector3(0, 0, 1);
+      const xAxis = new THREE.Vector3(1, 0, 0);
+      const idQ = new THREE.Quaternion();
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      const camDir = new THREE.Vector3();
+      const headLookQ = new THREE.Quaternion();
+      const headLookMat = new THREE.Matrix4();
+      const bodyFaceQ = new THREE.Quaternion();
+      const bodyArmQ = new THREE.Quaternion();
+      const _origin = new THREE.Vector3(0, 0, 0);
+      const _up = new THREE.Vector3(0, 1, 0);
+      const _headWorld = new THREE.Vector3();
+      const crowdBillboardQ = new THREE.Quaternion();
       let last = performance.now();
 
       function animate() {
@@ -1735,52 +2450,65 @@ export default function PodiumTeleport({ user, wallets }) {
           if (st.jmboIntroTimer > 0) st.jmboIntroTimer -= dt;
         }
 
-        // ═══ MICROPHONE — orbits with camera, always between caller and audience ═══
+        // ═══ MICROPHONE — hidden for now ═══
         if (threeRef.current.micGroup) {
-          const mic = threeRef.current.micGroup;
-          mic.scale.setScalar(st.micScale);
-          // Place mic at micZ distance from center, toward the camera
-          const camAngle = Math.atan2(camera.position.x, camera.position.z);
-          mic.position.set(
-            Math.sin(camAngle) * st.micZ,
-            st.micY,
-            Math.cos(camAngle) * st.micZ
-          );
-          // Face camera (Y-axis only)
-          mic.lookAt(camera.position.x, mic.position.y, camera.position.z);
+          threeRef.current.micGroup.visible = false;
         }
 
-        // ═══ GUITAR — pinned to speaker's chest, materializes with teleport ═══
-        if (threeRef.current.guitarMesh) {
-          const guitar = threeRef.current.guitarMesh;
-          const isBeamIn = st.teleportPhase === "beam_in" && st.teleportTimer > 0.25;
-          const isActive = st.speaker !== null && st.teleportPhase === "active";
-          guitar.visible = isBeamIn || isActive;
-          if (guitar.visible) {
-            const stageY = st.speakerY || 1.2;
-            const spkScale = st.speakerScale || 1.8;
-            // During beam_in: scale up from 0 matching the speaker's entrance
-            let scaleMul = 1;
-            if (isBeamIn) {
-              scaleMul = Math.min((st.teleportTimer - 0.25) / 0.3, 1);
-              scaleMul = scaleMul * scaleMul * (3 - 2 * scaleMul); // smoothstep
-            }
-            const chestY = stageY + 0.70 * spkScale * scaleMul;
-            // Camera-facing Y rotation (body always faces camera)
-            const fAngle = Math.atan2(camera.position.x, camera.position.z);
-            // Apply Y rotation FIRST via rotation order, then local tilts stay stable
-            guitar.rotation.order = "YXZ";
-            guitar.rotation.set(st.guitarRotX, fAngle + st.guitarRotY, st.guitarRotZ);
-            // Local offsets: X = right, Y = up, Z = forward (toward camera)
-            // Convert local offsets to world space using the facing angle
-            const sinF = Math.sin(fAngle), cosF = Math.cos(fAngle);
-            guitar.position.set(
-              sinF * st.guitarZ + cosF * st.guitarX,
-              chestY + st.guitarY,
-              cosF * st.guitarZ - sinF * st.guitarX
-            );
-            guitar.scale.setScalar(st.guitarScale * scaleMul);
-          }
+        // ═══ DJ BOOTH — always on the table ═══
+        if (threeRef.current.djBooth) {
+          const djBooth = threeRef.current.djBooth;
+          djBooth.visible = true;
+          const camAngle = Math.atan2(camera.position.x, camera.position.z);
+          djBooth.rotation.y = camAngle + st.djRotY;
+          djBooth.position.set(
+            Math.sin(camAngle) * st.djZ + Math.cos(camAngle) * st.djX,
+            st.djY,
+            Math.cos(camAngle) * st.djZ - Math.sin(camAngle) * st.djX
+          );
+          djBooth.scale.setScalar(st.djScale);
+        }
+
+        // ═══ DJ TABLE — butter slab, rotates with camera under DJ booth ═══
+        if (threeRef.current.djTable) {
+          const dtRef = threeRef.current.djTable;
+          const camAngle = Math.atan2(camera.position.x, camera.position.z);
+          const hw = st.dtW / 2, hd = st.dtD / 2, legH = st.dtY - 0.6;
+          dtRef.mesh.scale.set(st.dtW, st.dtH, st.dtD);
+          dtRef.mesh.position.set(0, st.dtY, st.dtZoff);
+          // Corner posts — from stage floor up to table bottom
+          const corners = [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd]];
+          dtRef.posts.forEach((p, i) => {
+            p.scale.set(1, legH, 1);
+            p.position.set(corners[i][0], st.dtY - st.dtH / 2 - legH / 2, st.dtZoff + corners[i][1]);
+          });
+          // Trim — thin outline on top edge
+          dtRef.trimMesh.scale.set(st.dtW + 0.06, st.dtH * 0.3, st.dtD + 0.06);
+          dtRef.trimMesh.position.set(0, st.dtY + st.dtH * 0.4, st.dtZoff);
+          dtRef.group.rotation.y = camAngle;
+          dtRef.group.position.set(
+            Math.sin(camAngle) * st.djZ + Math.cos(camAngle) * st.djX,
+            0,
+            Math.cos(camAngle) * st.djZ - Math.sin(camAngle) * st.djX
+          );
+        }
+
+        // ═══ LED SCREEN — behind DJ booth, facing audience ═══
+        if (threeRef.current.ledScreen) {
+          const led = threeRef.current.ledScreen;
+          const camAngle = Math.atan2(camera.position.x, camera.position.z);
+          // Place behind the DJ (opposite of camera direction from stage center)
+          const ledR = st.djZ + st.tvZ;
+          led.mesh.position.set(
+            -Math.sin(camAngle) * ledR + Math.cos(camAngle) * st.djX,
+            st.tvY,
+            -Math.cos(camAngle) * ledR - Math.sin(camAngle) * st.djX
+          );
+          led.mesh.scale.setScalar(st.tvScale);
+          // Face toward camera (audience) — plane normal is +Z, so camAngle faces it at camera
+          led.mesh.rotation.y = camAngle;
+          // TV shader runs on its own clock — fast, complementary hue to venue
+          if (led.tvMat) { led.tvMat.uniforms.uTime.value = t; led.tvMat.uniforms.uHue.value = st.domeHueShift; }
         }
 
         // ═══ RENDER CANVASES AT 5FPS (3FPS mobile) — dot-product cull back-facing faces ═══
@@ -1790,9 +2518,19 @@ export default function PodiumTeleport({ user, wallets }) {
           if (Math.floor(t * jmboFPS) !== Math.floor((t - dt) * jmboFPS)) {
             const cd = chartDataRef.current;
             const si = speakerInfoRef.current;
+            const activeCoin = selectedCoinRef.current || si?.coin;
             const vt = votesRef.current || { up: 0, down: 0 };
 
-            // ── MARIO PARTY INTRO FACE — "degen_ape CALLS $BONK" splash ──
+            // ═══ GOLDEN RATIO TYPE SCALE (φ = 1.618) ═══
+            const φ = 1.618;
+            const T_XS = 17;
+            const T_S  = 27;
+            const T_M  = 44;
+            const T_L  = 72;
+            const F_DISPLAY = "'Inter', sans-serif";
+            const F_DATA = "'JetBrains Mono', monospace";
+
+            // ── MARIO PARTY INTRO FACE — speaker CALLS $TOKEN splash ──
             function renderIntroFace(jx, W, H) {
               jx.clearRect(0, 0, W, H);
               const introT = st.jmboIntroTimer;
@@ -1966,14 +2704,72 @@ export default function PodiumTeleport({ user, wallets }) {
               jx.fillStyle = bg; jx.fillRect(0, 0, W, H);
 
               if (si) {
-                const pos2 = si.coin.positive;
+                // Banner background image (low opacity)
+                const hdrImg = headerImgRef.current;
+                if (hdrImg && hdrImg.naturalWidth) {
+                  jx.save(); jx.globalAlpha = 0.15;
+                  const scale = Math.max(W / hdrImg.naturalWidth, H / hdrImg.naturalHeight);
+                  const dw = hdrImg.naturalWidth * scale, dh = hdrImg.naturalHeight * scale;
+                  jx.drawImage(hdrImg, (W - dw) / 2, (H - dh) / 2, dw, dh);
+                  jx.restore();
+                }
+                const ac2 = si.coin;
+                const pos2 = ac2.positive;
                 const priceColor = pos2 ? "#00ff88" : "#ff4444";
                 const glowC = pos2 ? "rgba(0,255,136," : "rgba(255,68,68,";
                 const pad = 30;
 
-                // ── CHART with axes — fills the main face ──
+                // ── HEADER: $TICKER by caller @ mcap ──
+                const hdrY = 50;
+                let hx = pad;
+                // Coin logo
+                const coinImg2 = coinImgRef.current;
+                const logoSz = 38;
+                if (coinImg2 && coinImg2.naturalWidth) {
+                  jx.save();
+                  jx.beginPath(); jx.arc(hx + logoSz / 2, hdrY - logoSz * 0.25, logoSz / 2, 0, Math.PI * 2); jx.clip();
+                  jx.drawImage(coinImg2, hx, hdrY - logoSz * 0.75, logoSz, logoSz);
+                  jx.restore();
+                  hx += logoSz + 8;
+                }
+                // $TICKER
+                jx.font = `800 42px ${F_DISPLAY}`;
+                jx.fillStyle = "#fff"; jx.textAlign = "left";
+                jx.fillText(ac2.ticker, hx, hdrY);
+                hx += jx.measureText(ac2.ticker).width + 10;
+                // "by caller"
+                jx.font = `500 20px ${F_DISPLAY}`;
+                jx.fillStyle = "#555";
+                jx.fillText("by", hx, hdrY);
+                hx += jx.measureText("by").width + 6;
+                jx.font = `bold 22px ${F_DISPLAY}`;
+                jx.fillStyle = "#ff2d78";
+                jx.fillText(si.name, hx, hdrY);
+                hx += jx.measureText(si.name).width + 10;
+                // "@ $43.7M"
+                jx.font = `500 20px ${F_DATA}`;
+                jx.fillStyle = "#555";
+                jx.fillText("@ " + (ac2.mcap || "—"), hx, hdrY);
+
+                // ── PRICE + CHANGE — big line below header ──
+                const priceY = hdrY + 48;
+                const rawP2 = parseFloat(ac2.price) || 0;
+                const pFmt = fmtPrice(rawP2);
+                jx.font = `bold 40px ${F_DATA}`;
+                jx.fillStyle = "#fff"; jx.textAlign = "left";
+                jx.fillText(pFmt, pad, priceY);
+                const pW = jx.measureText(pFmt).width;
+                jx.font = `bold 32px ${F_DATA}`;
+                jx.fillStyle = priceColor;
+                jx.shadowColor = priceColor; jx.shadowBlur = 8;
+                jx.fillText(ac2.change || "+0.0%", pad + pW + 12, priceY);
+                jx.shadowBlur = 0;
+
+                // ── CHART with axes — stats row + pills below ──
+                const headerH = priceY + 16;
                 const axisR = 80, axisB = 36; // space for Y-axis RIGHT, X-axis bottom
-                const cx2 = pad, cy2 = 16, cw2 = W - pad - axisR, ch2 = H - cy2 - axisB;
+                const statsRowH = 60; // space for LIQ/VOL/FDV/MC below chart
+                const cx2 = pad, cy2 = headerH, cw2 = W - pad - axisR, ch2 = H - cy2 - axisB - statsRowH;
                 const price = parseFloat(si.coin.price) || 0.001;
 
                 if (cd && cd.length > 1) {
@@ -2038,34 +2834,71 @@ export default function PodiumTeleport({ user, wallets }) {
                   jx.setLineDash([]);
                 }
 
-                // ── Timeframe pills (bottom-right) ──
+                // ── LIQ · VOL · FDV · MC — stats bar below chart ──
+                const ac = si.coin;
+                const statsY = cy2 + ch2 + axisB + 8;
+                const jStats = [
+                  { label: "LIQ", val: ac.liq || "—", color: "#00d4ff" },
+                  { label: "VOL", val: ac.vol || "—", color: "#b24dff" },
+                  { label: "FDV", val: ac.fdv || ac.mcap || "—", color: "#fff" },
+                  { label: "MC", val: ac.mcap || "—", color: "#fff" },
+                ];
+                const jStatW = (W - pad * 2) / jStats.length;
+                jStats.forEach((s, i) => {
+                  const sx = pad + i * jStatW;
+                  jx.font = `600 18px ${F_DISPLAY}`;
+                  jx.fillStyle = "rgba(255,255,255,0.3)"; jx.textAlign = "center";
+                  jx.letterSpacing = "2px";
+                  jx.fillText(s.label, sx + jStatW / 2, statsY);
+                  jx.letterSpacing = "0px";
+                  jx.font = `800 34px ${F_DATA}`;
+                  jx.fillStyle = s.color;
+                  jx.fillText(s.val, sx + jStatW / 2, statsY + 34);
+                });
+                jx.textAlign = "left";
+
+                // ── %Change pills (bottom of chart area) ──
                 const tf = chartTFRef.current;
-                const pills = ["1m", "5m", "1h"];
-                const pillW = 36, pillH = 18, pillGap = 6;
-                const pillStartX = W - pad - (pillW + pillGap) * pills.length;
-                const pillY = H - 28;
-                pills.forEach((p, pi) => {
+                const pc = si.coin.priceChanges || { m5: 0, h1: 0, h6: 0, h24: 0 };
+                const changePills = [
+                  { label: "5M", val: pc.m5, chartTf: "1m" },
+                  { label: "1H", val: pc.h1, chartTf: "5m" },
+                  { label: "6H", val: pc.h6, chartTf: "1h" },
+                  { label: "24H", val: pc.h24, chartTf: "1h" },
+                ];
+                const pillW = 80, pillH = 20, pillGap = 6;
+                const totalPillW = (pillW + pillGap) * changePills.length - pillGap;
+                const pillStartX = (W - totalPillW) / 2;
+                const pillY = H - 30;
+                changePills.forEach((p, pi) => {
                   const px = pillStartX + pi * (pillW + pillGap);
-                  const active = p === tf;
-                  jx.fillStyle = active ? "rgba(255,45,120,0.3)" : "rgba(255,255,255,0.05)";
+                  const isPos = p.val >= 0;
+                  const active = p.chartTf === tf;
+                  const valStr = `${isPos ? "+" : ""}${p.val.toFixed(1)}%`;
+                  jx.fillStyle = active ? "rgba(255,45,120,0.2)" : "rgba(255,255,255,0.04)";
                   jx.beginPath(); jx.roundRect(px, pillY, pillW, pillH, 4); jx.fill();
                   if (active) { jx.strokeStyle = "#ff2d78"; jx.lineWidth = 1; jx.beginPath(); jx.roundRect(px, pillY, pillW, pillH, 4); jx.stroke(); }
                   jx.font = "bold 11px 'JetBrains Mono', monospace";
-                  jx.fillStyle = active ? "#ff2d78" : "#555"; jx.textAlign = "center";
-                  jx.fillText(p, px + pillW / 2, pillY + 13);
+                  jx.fillStyle = isPos ? "#00ff88" : "#ff4444"; jx.textAlign = "center";
+                  jx.fillText(`${p.label}: ${valStr}`, px + pillW / 2, pillY + 14);
                 });
                 jx.textAlign = "left";
 
               } else {
-                // No active call — big logo, chart-area sized
-                jx.font = "bold 80px 'Inter', sans-serif";
-                jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
-                jx.shadowColor = "#ff2d78"; jx.shadowBlur = 40;
+                // No active call — clean white logo on jumbotron
+                jx.font = "400 72px 'Inter', sans-serif";
+                jx.letterSpacing = "12px";
+                jx.textAlign = "center";
+                jx.shadowColor = "rgba(255,255,255,0.25)"; jx.shadowBlur = 20;
+                jx.fillStyle = "#ffffff";
                 jx.fillText("trench.fm", W / 2, H / 2 - 20);
                 jx.shadowBlur = 0;
-                jx.font = "400 24px 'Inter', sans-serif";
-                jx.fillStyle = "#444";
+                jx.letterSpacing = "0px";
+                jx.font = "300 18px 'Inter', sans-serif";
+                jx.letterSpacing = "4px";
+                jx.fillStyle = "rgba(255,255,255,0.3)";
                 jx.fillText("step up to the mic", W / 2, H / 2 + 30);
+                jx.letterSpacing = "0px";
                 const earn = callerEarningsRef.current;
                 const topCallers = Object.entries(earn).sort((a, b) => b[1] - a[1]).slice(0, 3);
                 if (topCallers.length > 0) {
@@ -2093,86 +2926,82 @@ export default function PodiumTeleport({ user, wallets }) {
 
               const calls = st.topCallsToday || [];
               const pad = 28;
-              const fSz = 72; // 2x the ribbon text — JUMBOTRON
 
-              // Title
-              jx.font = `bold ${fSz}px 'Inter', sans-serif`;
+              // Title — T_L hero
+              jx.font = `bold ${T_L}px ${F_DISPLAY}`;
               jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
               jx.shadowColor = "#ff2d78"; jx.shadowBlur = 20;
-              jx.fillText("TOP CALLS TODAY", W / 2, fSz + 10);
+              jx.fillText("TOP CALLS TODAY", W / 2, T_L + 10);
               jx.shadowBlur = 0;
 
               // Divider
               jx.strokeStyle = "rgba(255,45,120,0.4)"; jx.lineWidth = 2;
-              jx.beginPath(); jx.moveTo(pad, fSz + 28); jx.lineTo(W - pad, fSz + 28); jx.stroke();
+              jx.beginPath(); jx.moveTo(pad, T_L + 28); jx.lineTo(W - pad, T_L + 28); jx.stroke();
 
               if (calls.length === 0) {
-                jx.font = `500 ${fSz * 0.6 | 0}px 'Inter', sans-serif`;
+                jx.font = `500 ${T_M}px ${F_DISPLAY}`;
                 jx.fillStyle = "#444"; jx.textAlign = "center";
                 jx.fillText("Waiting for calls...", W / 2, H / 2);
-                jx.font = `bold ${fSz * 0.5 | 0}px 'JetBrains Mono', monospace`;
+                jx.font = `bold ${T_S}px ${F_DATA}`;
                 jx.fillStyle = "#00ff88";
-                jx.fillText("● LIVE", W / 2, H / 2 + fSz * 0.7);
+                jx.fillText("\u25CF LIVE", W / 2, H / 2 + T_M);
                 jx.textAlign = "left";
                 return;
               }
 
-              const startY = fSz + 48;
+              const startY = T_L + 48;
               const rowH = (H - startY - 10) / 3;
               const medals = ["#FFD700", "#C0C0C0", "#CD7F32"];
 
               calls.forEach((call, idx) => {
                 const rowY = startY + idx * rowH + rowH * 0.55;
 
-                // Alternating row bg
                 if (idx % 2 === 0) {
                   jx.fillStyle = "rgba(255,255,255,0.02)";
                   jx.fillRect(0, startY + idx * rowH, W, rowH);
                 }
 
-                // SINGLE ROW: #rank $TICKER by caller @ fdv · time · +Xx
                 jx.textAlign = "left";
                 let lx = pad;
 
-                // Rank medal
-                jx.font = `bold ${fSz * 0.7 | 0}px 'JetBrains Mono', monospace`;
+                // Rank — T_M body
+                jx.font = `bold ${T_M}px ${F_DATA}`;
                 jx.fillStyle = medals[idx] || "#888";
                 jx.fillText((idx + 1) + ".", lx, rowY);
                 lx += jx.measureText((idx + 1) + ".").width + 10;
 
-                // $TICKER
-                jx.font = `bold ${fSz}px 'Inter', sans-serif`;
+                // $TICKER — T_L hero
+                jx.font = `bold ${T_L}px ${F_DISPLAY}`;
                 jx.fillStyle = "#fff";
                 jx.fillText(call.ticker, lx, rowY);
-                lx += jx.measureText(call.ticker).width + 14;
+                lx += jx.measureText(call.ticker).width + 12;
 
-                // "by"
-                jx.font = `500 ${fSz * 0.45 | 0}px 'Inter', sans-serif`;
+                // "by" — T_S metadata
+                jx.font = `500 ${T_S}px ${F_DISPLAY}`;
                 jx.fillStyle = "#666";
                 jx.fillText("by", lx, rowY);
-                lx += jx.measureText("by").width + 10;
+                lx += jx.measureText("by").width + 8;
 
-                // Caller name
-                jx.font = `bold ${fSz * 0.75 | 0}px 'Inter', sans-serif`;
+                // Caller — T_M body
+                jx.font = `bold ${T_M}px ${F_DISPLAY}`;
                 jx.fillStyle = "#ff2d78";
                 jx.fillText(call.caller, lx, rowY);
-                lx += jx.measureText(call.caller).width + 12;
+                lx += jx.measureText(call.caller).width + 10;
 
-                // @ fdv · time
-                jx.font = `500 ${fSz * 0.45 | 0}px 'JetBrains Mono', monospace`;
+                // @ fdv · time — T_S metadata
+                jx.font = `500 ${T_S}px ${F_DATA}`;
                 jx.fillStyle = "#555";
                 jx.fillText("@ " + call.fdv + " · " + call.timeAgo, lx, rowY);
 
-                // Change — far right, neon glow
+                // Change — T_L hero, neon glow
                 const isPos2 = call.change.startsWith("+");
-                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
+                jx.font = `bold ${T_L}px ${F_DATA}`;
                 jx.fillStyle = isPos2 ? "#00ff88" : "#ff4444";
                 jx.shadowColor = isPos2 ? "#00ff88" : "#ff4444";
                 jx.shadowBlur = 14; jx.textAlign = "right";
                 jx.fillText(call.change, W - pad, rowY);
                 jx.shadowBlur = 0;
 
-                // Row separator
                 if (idx < calls.length - 1) {
                   jx.strokeStyle = "rgba(255,45,120,0.15)"; jx.lineWidth = 1;
                   jx.beginPath(); jx.moveTo(pad, startY + (idx + 1) * rowH); jx.lineTo(W - pad, startY + (idx + 1) * rowH); jx.stroke();
@@ -2185,54 +3014,64 @@ export default function PodiumTeleport({ user, wallets }) {
             function renderArenaIntro(jx, W, H) {
               jx.clearRect(0, 0, W, H);
               const ip = Math.min(st.introTimer / st.introDuration, 1);
-              // Dark background with pulsing radial glow
-              jx.fillStyle = "#02000a"; jx.fillRect(0, 0, W, H);
+              // Dark background
+              jx.fillStyle = "#04010e"; jx.fillRect(0, 0, W, H);
               const cx = W / 2, cy = H * 0.42;
-              // Radial neon burst
-              const burstR = 80 + ip * W * 0.4;
+              // Warm theatrical glow — amber spotlight on dark stage
+              const burstR = 80 + ip * W * 0.35;
               const rg = jx.createRadialGradient(cx, cy, 0, cx, cy, burstR);
-              rg.addColorStop(0, `rgba(255,45,120,${0.2 + Math.sin(t * 3) * 0.08})`);
-              rg.addColorStop(0.5, `rgba(0,212,255,${0.08 + Math.sin(t * 2.5) * 0.04})`);
+              rg.addColorStop(0, `rgba(210,160,120,${0.12 + Math.sin(t * 2) * 0.04})`);
+              rg.addColorStop(0.5, `rgba(180,130,100,${0.04 + Math.sin(t * 1.5) * 0.02})`);
               rg.addColorStop(1, "rgba(0,0,0,0)");
               jx.fillStyle = rg; jx.fillRect(0, 0, W, H);
-              // Speed lines
-              if (ip > 0.1) {
-                for (let r = 0; r < 16; r++) {
-                  const ang = (r / 16) * Math.PI * 2 + t * 0.8;
-                  const inner = 50; const outer = inner + ip * W * 0.5;
+              // Subtle radial rays — warm gold, not neon
+              if (ip > 0.15) {
+                for (let r = 0; r < 12; r++) {
+                  const ang = (r / 12) * Math.PI * 2 + t * 0.3;
+                  const inner = 60; const outer = inner + ip * W * 0.35;
                   jx.save(); jx.translate(cx, cy); jx.rotate(ang);
                   const lg = jx.createLinearGradient(0, inner, 0, outer);
-                  const c = r % 2 === 0 ? "255,45,120" : "0,212,255";
-                  lg.addColorStop(0, `rgba(${c},${0.12 * ip})`);
+                  lg.addColorStop(0, `rgba(196,168,142,${0.06 * ip})`);
                   lg.addColorStop(1, "rgba(0,0,0,0)");
                   jx.fillStyle = lg;
-                  jx.fillRect(-2, inner, 4, outer - inner);
+                  jx.fillRect(-1.5, inner, 3, outer - inner);
                   jx.restore();
                 }
               }
-              // "trench.fm" logo — scale up with bounce
-              const logoScale = ip < 0.3 ? Math.pow(ip / 0.3, 0.5) * 1.15 : 1 + Math.sin((ip - 0.3) * 8) * 0.03 * (1 - ip);
-              const fontSize = Math.floor(72 * logoScale);
-              jx.save(); jx.globalAlpha = Math.min(ip * 4, 1);
-              jx.font = `900 ${fontSize}px "Press Start 2P", monospace`;
+              // "trench.fm" logo — rose gold gradient, scale up with bounce
+              const logoScale = ip < 0.3 ? Math.pow(ip / 0.3, 0.5) * 1.1 : 1 + Math.sin((ip - 0.3) * 6) * 0.02 * (1 - ip);
+              const fontSize = Math.floor(64 * logoScale);
+              jx.save(); jx.globalAlpha = Math.min(ip * 3.5, 1);
+              jx.font = `400 ${fontSize}px "Inter", sans-serif`;
+              jx.letterSpacing = `${Math.floor(fontSize * 0.18)}px`;
               jx.textAlign = "center"; jx.textBaseline = "middle";
-              // Neon glow layers
-              jx.shadowColor = "#ff2d78"; jx.shadowBlur = 40;
-              jx.fillStyle = "#ff2d78"; jx.fillText("trench.fm", cx, cy);
-              jx.shadowColor = "#00d4ff"; jx.shadowBlur = 25;
-              jx.fillStyle = "#fff"; jx.fillText("trench.fm", cx, cy);
+              // Clean white text on jumbotron
+              jx.shadowColor = "rgba(255,255,255,0.3)"; jx.shadowBlur = 20;
+              jx.fillStyle = "#ffffff"; jx.fillText("trench.fm", cx, cy);
               jx.shadowBlur = 0;
-              // Subtitle
-              const subAlpha = Math.max(0, (ip - 0.35) * 3);
-              if (subAlpha > 0) {
-                jx.globalAlpha = Math.min(subAlpha, 1);
-                jx.font = `600 ${Math.floor(22 * logoScale)}px "Press Start 2P", monospace`;
-                jx.fillStyle = "#00d4ff";
-                jx.fillText("WELCOME TO THE ARENA", cx, cy + fontSize * 0.8);
+              // Hairline rule
+              const ruleAlpha = Math.max(0, (ip - 0.25) * 3);
+              if (ruleAlpha > 0) {
+                jx.globalAlpha = Math.min(ruleAlpha, 0.35);
+                const ruleGrad = jx.createLinearGradient(cx - 50, 0, cx + 50, 0);
+                ruleGrad.addColorStop(0, "transparent");
+                ruleGrad.addColorStop(0.3, "rgba(255,255,255,0.4)");
+                ruleGrad.addColorStop(0.5, "rgba(255,255,255,0.6)");
+                ruleGrad.addColorStop(0.7, "rgba(255,255,255,0.4)");
+                ruleGrad.addColorStop(1, "transparent");
+                jx.fillStyle = ruleGrad;
+                jx.fillRect(cx - 50, cy + fontSize * 0.55, 100, 1);
               }
-              // Scanlines
-              jx.globalAlpha = 0.04;
-              for (let y = 0; y < H; y += 4) { jx.fillStyle = "#000"; jx.fillRect(0, y, W, 2); }
+              // Subtitle
+              const subAlpha = Math.max(0, (ip - 0.4) * 2.5);
+              if (subAlpha > 0) {
+                jx.globalAlpha = Math.min(subAlpha, 0.4);
+                jx.font = `300 ${Math.floor(14 * logoScale)}px "Inter", sans-serif`;
+                jx.letterSpacing = `${Math.floor(6)}px`;
+                jx.fillStyle = "rgba(255,255,255,0.6)";
+                jx.fillText("LIVE CRYPTO CALLS", cx, cy + fontSize * 0.8);
+              }
+              jx.letterSpacing = "0px";
               jx.restore();
             }
 
@@ -2262,7 +3101,9 @@ export default function PodiumTeleport({ user, wallets }) {
               f.tex.needsUpdate = true;
             });
 
-            // ── TOP RIBBON: scrolling marquee — PFP $TICKER %chg 🔵caller @foll ──
+            // ── TOP RIBBON ──
+            // ROW 1: [COIN LOGO 48px] $TICKER / SOL   on DEX_NAME
+            // ROW 2: LIQ $X · VOL $X · FDV $X · MC $X
             function renderTopRibbon(jx, W, H) {
               jx.clearRect(0, 0, W, H);
               jx.fillStyle = "#06021a"; jx.fillRect(0, 0, W, H);
@@ -2270,113 +3111,79 @@ export default function PodiumTeleport({ user, wallets }) {
               edgeG.addColorStop(0, "rgba(255,45,120,0)"); edgeG.addColorStop(1, "rgba(255,45,120,0.35)");
               jx.fillStyle = edgeG; jx.fillRect(0, H - 6, W, 6);
 
-              if (si) {
-                const fSz = 90;
-                const pfpSize = 90;
-                const cpSz = fSz * 0.75;
-                const row1Y = H * 0.36;
-                const row2Y = H * 0.82;
-                const scrollSpeed = 60; // px/sec
-                const gap = 120; // space between repeats
+              const ac = activeCoin || si?.coin;
+              if (si && ac) {
+                const pad = 12;
+                const iconSz = 48;
+                const row1Y = H * 0.38;
+                const row2Y = H * 0.88;
 
-                // ── Row 1 draw helper: returns total width ──
-                const pfpImg = pfpImgsRef.current[st.jmboIntroCharIdx >= 0 ? st.jmboIntroCharIdx % pfpImgsRef.current.length : 0];
-                const callerPfpIdx = PFP_NAMES.indexOf(si.name);
-                const callerPfpImg = callerPfpIdx >= 0 ? pfpImgsRef.current[callerPfpIdx % pfpImgsRef.current.length] : null;
-                const drawRow1 = (ox) => {
-                  let lx = ox;
-                  // Coin PFP
-                  if (pfpImg && pfpImg.naturalWidth) {
-                    jx.save();
-                    jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 4, pfpSize / 2, 0, Math.PI * 2); jx.clip();
-                    jx.drawImage(pfpImg, lx, row1Y - pfpSize / 4 - pfpSize / 2, pfpSize, pfpSize);
-                    jx.restore();
-                    jx.strokeStyle = "#ff2d78"; jx.lineWidth = 3;
-                    jx.beginPath(); jx.arc(lx + pfpSize / 2, row1Y - pfpSize / 4, pfpSize / 2 + 3, 0, Math.PI * 2); jx.stroke();
-                    lx += pfpSize + 18;
-                  }
-                  // $TICKER
-                  jx.font = `bold ${fSz}px 'Inter', sans-serif`;
-                  jx.fillStyle = "#fff"; jx.textAlign = "left";
-                  jx.fillText(si.coin.ticker, lx, row1Y);
-                  lx += jx.measureText(si.coin.ticker).width + 14;
-                  // % change
-                  const chgTxt = si.coin.change;
-                  jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                  jx.fillStyle = si.coin.positive ? "#00ff88" : "#ff4444";
-                  jx.shadowColor = si.coin.positive ? "#00ff88" : "#ff4444";
-                  jx.shadowBlur = 14;
-                  jx.fillText(chgTxt, lx, row1Y);
-                  jx.shadowBlur = 0;
-                  lx += jx.measureText(chgTxt).width + 18;
-                  // Caller PFP circle
-                  const cpCy = row1Y - cpSz / 3;
-                  if (callerPfpImg && callerPfpImg.naturalWidth) {
-                    jx.save();
-                    jx.beginPath(); jx.arc(lx + cpSz / 2, cpCy, cpSz / 2, 0, Math.PI * 2); jx.clip();
-                    jx.drawImage(callerPfpImg, lx, cpCy - cpSz / 2, cpSz, cpSz);
-                    jx.restore();
-                    jx.strokeStyle = "#ff2d78"; jx.lineWidth = 2;
-                    jx.beginPath(); jx.arc(lx + cpSz / 2, cpCy, cpSz / 2 + 2, 0, Math.PI * 2); jx.stroke();
-                    lx += cpSz + 10;
-                  }
-                  // Caller name
-                  jx.font = `bold ${fSz}px 'Inter', sans-serif`;
-                  jx.fillStyle = "#ff2d78";
-                  jx.fillText(si.name, lx, row1Y);
-                  lx += jx.measureText(si.name).width + 12;
-                  // @followers
-                  jx.font = `500 ${fSz * 0.45 | 0}px 'JetBrains Mono', monospace`;
-                  jx.fillStyle = "#555";
-                  jx.fillText("@" + (si.followers || "?"), lx, row1Y);
-                  lx += jx.measureText("@" + (si.followers || "?")).width;
-                  return lx - ox; // total width
-                };
-
-                // ── Row 2 draw helper ──
-                const r2Stats = [
-                  [si.coin.mcap, "#fff"], ["$" + si.coin.price, "#ccc"],
-                  [si.coin.liq || "—", "#00d4ff"], [si.coin.supply || "1B", "#777"],
-                ];
-                const drawRow2 = (ox) => {
-                  let sx = ox;
-                  r2Stats.forEach(([val, color]) => {
-                    jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                    jx.fillStyle = color; jx.textAlign = "left";
-                    jx.fillText(val, sx, row2Y);
-                    sx += jx.measureText(val).width + 24;
-                  });
-                  return sx - ox;
-                };
-
-                // Measure widths (dry run outside clip)
-                jx.save(); jx.globalAlpha = 0;
-                const w1 = drawRow1(0); const w2 = drawRow2(0);
-                jx.restore();
-
-                // ── Scroll + clip each row ──
-                jx.save();
-                jx.beginPath(); jx.rect(0, 0, W, H * 0.55); jx.clip();
-                if (w1 > W - 20) {
-                  const loop1 = w1 + gap;
-                  const off1 = -((st.clock * scrollSpeed) % loop1);
-                  drawRow1(off1); drawRow1(off1 + loop1);
-                } else { drawRow1(24); }
-                jx.restore();
-
-                jx.save();
-                jx.beginPath(); jx.rect(0, H * 0.55, W, H * 0.5); jx.clip();
-                if (w2 > W - 20) {
-                  const loop2 = w2 + gap;
-                  const off2 = -((st.clock * scrollSpeed * 0.8) % loop2); // slightly slower
-                  drawRow2(off2); drawRow2(off2 + loop2);
-                } else { drawRow2(24); }
-                jx.restore();
-              } else {
-                jx.font = "bold 100px 'Inter', sans-serif";
-                jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
-                jx.fillText("trench.fm", W / 2, H / 2 + 20);
+                // ── ROW 1: [LOGO] $TICKER / SOL   on DEX ──
+                let lx = pad;
+                const coinImg = coinImgRef.current;
+                const cy1 = row1Y - iconSz * 0.25;
+                if (coinImg && coinImg.naturalWidth) {
+                  jx.save();
+                  jx.beginPath(); jx.arc(lx + iconSz / 2, cy1, iconSz / 2, 0, Math.PI * 2); jx.clip();
+                  jx.drawImage(coinImg, lx, cy1 - iconSz / 2, iconSz, iconSz);
+                  jx.restore();
+                  jx.strokeStyle = "rgba(255,255,255,0.15)"; jx.lineWidth = 2;
+                  jx.beginPath(); jx.arc(lx + iconSz / 2, cy1, iconSz / 2 + 1, 0, Math.PI * 2); jx.stroke();
+                } else {
+                  jx.fillStyle = ac.positive ? "#00ff88" : "#ff4444";
+                  jx.beginPath(); jx.arc(lx + iconSz / 2, cy1, iconSz / 2, 0, Math.PI * 2); jx.fill();
+                  jx.font = `bold ${iconSz * 0.5 | 0}px ${F_DISPLAY}`;
+                  jx.fillStyle = "#000"; jx.textAlign = "center";
+                  jx.fillText(ac.ticker[1] || "?", lx + iconSz / 2, cy1 + iconSz * 0.15);
+                  jx.textAlign = "left";
+                }
+                lx += iconSz + 10;
+                // $TICKER — T_L hero
+                jx.font = `800 ${T_L}px ${F_DISPLAY}`;
+                jx.fillStyle = "#fff"; jx.textAlign = "left";
+                jx.fillText(ac.ticker, lx, row1Y);
+                lx += jx.measureText(ac.ticker).width + 6;
+                // / SOL
+                jx.font = `500 ${T_S}px ${F_DISPLAY}`;
+                jx.fillStyle = "#555";
+                jx.fillText("/ SOL", lx, row1Y);
+                lx += jx.measureText("/ SOL").width + 14;
+                // DEX badge — small rounded rect
+                const dexName = (ac.dex && ac.dex !== "—") ? ac.dex.toUpperCase() : null;
+                if (dexName && lx < W - 200) {
+                  jx.font = `bold ${T_XS}px ${F_DATA}`;
+                  const badgeW = jx.measureText(dexName).width + 16;
+                  const badgeH = 24;
+                  const badgeY = row1Y - badgeH + 4;
+                  jx.fillStyle = "rgba(255,45,120,0.12)";
+                  jx.beginPath(); jx.roundRect(lx, badgeY, badgeW, badgeH, 6); jx.fill();
+                  jx.strokeStyle = "rgba(255,45,120,0.3)"; jx.lineWidth = 1;
+                  jx.beginPath(); jx.roundRect(lx, badgeY, badgeW, badgeH, 6); jx.stroke();
+                  jx.fillStyle = "#ff2d78"; jx.textAlign = "center";
+                  jx.fillText(dexName, lx + badgeW / 2, badgeY + 16);
+                  jx.textAlign = "left";
+                }
+                // ── Price + change — right-aligned on row 1 ──
+                const rawPrice = parseFloat(ac.price) || 0;
+                const priceFmt2 = fmtPrice(rawPrice);
+                const chg = ac.change || "+0.0%";
+                const chgP = ac.positive;
+                jx.font = `bold ${T_M}px ${F_DATA}`;
+                jx.fillStyle = chgP ? "#00ff88" : "#ff4444"; jx.textAlign = "right";
+                jx.fillText(chg, W - pad, row1Y);
+                const chgW = jx.measureText(chg).width;
+                jx.font = `bold ${T_M}px ${F_DATA}`;
+                jx.fillStyle = "#fff";
+                jx.fillText(priceFmt2, W - pad - chgW - 10, row1Y);
                 jx.textAlign = "left";
+
+                // (stats moved to main face, below chart)
+              } else {
+                jx.font = `400 ${T_L}px "Inter", sans-serif`;
+                jx.letterSpacing = "6px";
+                jx.fillStyle = "#ffffff"; jx.textAlign = "center";
+                jx.fillText("trench.fm", W / 2, H * 0.6);
+                jx.letterSpacing = "0px"; jx.textAlign = "left";
               }
             }
             T.jmboTopFaces.forEach(f => {
@@ -2384,159 +3191,183 @@ export default function PodiumTeleport({ user, wallets }) {
               f.tex.needsUpdate = true;
             });
 
-            // ── BOTTOM RIBBON: 4 different detail strips (SAME text size as top) ──
+            // ── BOTTOM RIBBON: caller info + timer (stats moved to top ribbon) ──
             function renderBotRibbon(jx, W, H, side) {
               jx.clearRect(0, 0, W, H);
               jx.fillStyle = "#04010e"; jx.fillRect(0, 0, W, H);
-              // Top edge glow
               const edgeGlow = jx.createLinearGradient(0, 0, 0, 6);
               edgeGlow.addColorStop(0, "rgba(255,45,120,0.35)"); edgeGlow.addColorStop(1, "rgba(255,45,120,0)");
               jx.fillStyle = edgeGlow; jx.fillRect(0, 0, W, 6);
 
               if (!si) {
-                jx.font = "bold 48px 'JetBrains Mono', monospace";
+                jx.font = `bold ${T_M}px ${F_DATA}`;
                 jx.fillStyle = "#00ff88"; jx.textAlign = "center";
-                jx.fillText("● " + (400 + Math.floor(Math.random() * 50)) + " watching", W / 2, H / 2 + 16);
+                jx.fillText("\u25CF " + (400 + Math.floor(Math.random() * 50)) + " watching", W / 2, H / 2 + 16);
                 jx.textAlign = "left";
                 return;
               }
               const pad = 24;
-              const fSz = 80; // JUMBOTRON — big readable text (320px canvas)
               const tx2 = si.txStats || {};
-              const midY = H / 2;
+              const midY = H / 2 + 6;
 
-              // ── NBA countdown timer (shared) ──
+              // ── Timer bar (shared all faces) ──
               const timeLeft = speakerTimeRef.current;
               const secs = Math.ceil(timeLeft);
               const timeStr = String(secs).padStart(2, "0");
               const clockColor = timeLeft > 15 ? "#ff2d78" : timeLeft > 7 ? "#ffa500" : "#ff4444";
-
-              // Timer progress bar
               jx.fillStyle = "rgba(255,255,255,0.04)"; jx.fillRect(0, H - 6, W, 6);
               jx.fillStyle = clockColor; jx.fillRect(0, H - 6, W * (timeLeft / 45), 6);
 
-              if (side === 0) {
-                // ── FRONT: NBA Clock center + Buy/Sell ──
-                const clockW2 = 120, clockH2 = H - 28, clockX2 = W / 2 - clockW2 / 2;
-                jx.fillStyle = "rgba(0,0,0,0.6)";
-                jx.beginPath(); jx.roundRect(clockX2, 10, clockW2, clockH2, 8); jx.fill();
-                jx.strokeStyle = clockColor; jx.lineWidth = 2;
-                jx.beginPath(); jx.roundRect(clockX2, 10, clockW2, clockH2, 8); jx.stroke();
-                jx.font = "bold 64px 'JetBrains Mono', monospace";
-                jx.fillStyle = clockColor; jx.textAlign = "center";
-                jx.shadowColor = clockColor; jx.shadowBlur = 20;
-                jx.fillText(timeStr, W / 2, midY + 22);
-                jx.shadowBlur = 0;
+              // ── Helper: draw caller PFP + name (T_S "by", T_M name) ──
+              const drawCaller = (startX, y) => {
+                let lx = startX;
+                jx.font = `500 ${T_S}px ${F_DISPLAY}`;
+                jx.fillStyle = "#666"; jx.textAlign = "left";
+                jx.fillText("by", lx, y);
+                lx += jx.measureText("by").width + 8;
+                const callerPfpIdx = PFP_NAMES.indexOf(si.name);
+                const callerPfpImg = callerPfpIdx >= 0 ? pfpImgsRef.current[callerPfpIdx % pfpImgsRef.current.length] : null;
+                const cpSz = T_S;
+                const cy2 = y - cpSz / 3;
+                if (callerPfpImg && callerPfpImg.naturalWidth) {
+                  jx.save();
+                  jx.beginPath(); jx.arc(lx + cpSz / 2, cy2, cpSz / 2, 0, Math.PI * 2); jx.clip();
+                  jx.drawImage(callerPfpImg, lx, cy2 - cpSz / 2, cpSz, cpSz);
+                  jx.restore();
+                  jx.strokeStyle = "#ff2d78"; jx.lineWidth = 2;
+                  jx.beginPath(); jx.arc(lx + cpSz / 2, cy2, cpSz / 2 + 1, 0, Math.PI * 2); jx.stroke();
+                  lx += cpSz + 7;
+                } else {
+                  jx.fillStyle = "#ff2d78";
+                  jx.beginPath(); jx.arc(lx + cpSz / 2, cy2, cpSz / 2, 0, Math.PI * 2); jx.fill();
+                  jx.font = `bold ${cpSz * 0.6 | 0}px ${F_DISPLAY}`;
+                  jx.fillStyle = "#fff"; jx.textAlign = "center";
+                  jx.fillText((si.name[0] || "?").toUpperCase(), lx + cpSz / 2, cy2 + cpSz * 0.18);
+                  jx.textAlign = "left";
+                  lx += cpSz + 7;
+                }
+                jx.font = `bold ${T_M}px ${F_DISPLAY}`;
+                jx.fillStyle = "#ff2d78";
+                jx.fillText(si.name, lx, y);
+                return lx + jx.measureText(si.name).width;
+              };
 
-                // Buy/sell flanking the clock
+              // ── Helper: parseMcap ──
+              const parseMc = (s) => { if (!s || s === "\u2014") return 0; const n = parseFloat(s.replace(/[$,]/g, "")); if (s.includes("B")) return n * 1e9; if (s.includes("M")) return n * 1e6; if (s.includes("K")) return n * 1e3; return n; };
+
+              if (side === 0) {
+                // ── FRONT: by [PFP] caller · @ $XM → ROI | timer | buys/sells ──
+                const cy = midY - 6;
+                let rx = drawCaller(pad, cy);
+                rx += 12;
+                const callMcStr = "@ " + (si.callMcap || si.coin.mcap || "?");
+                jx.font = `500 ${T_S}px ${F_DATA}`;
+                jx.fillStyle = "#666"; jx.textAlign = "left";
+                jx.fillText(callMcStr, rx, cy);
+                rx += jx.measureText(callMcStr).width + 12;
+                // ROI
+                const callVal = parseMc(si.callMcap);
+                const curVal = parseMc(si.coin.mcap);
+                if (callVal > 0 && curVal > 0) {
+                  const roi = curVal / callVal;
+                  const roiStr = roi >= 1 ? roi.toFixed(1) + "x" : (roi * 100).toFixed(0) + "%";
+                  jx.font = `bold ${T_M}px ${F_DATA}`;
+                  jx.fillStyle = roi >= 1 ? "#00ff88" : "#ff4444";
+                  jx.shadowColor = roi >= 1 ? "#00ff88" : "#ff4444"; jx.shadowBlur = 6;
+                  jx.fillText(roiStr, rx, cy);
+                  jx.shadowBlur = 0;
+                }
+                // Timer right
+                jx.font = `bold ${T_L}px ${F_DATA}`;
+                jx.fillStyle = clockColor; jx.textAlign = "right";
+                jx.shadowColor = clockColor; jx.shadowBlur = 12;
+                jx.fillText(timeStr, W - pad, midY + 14);
+                jx.shadowBlur = 0;
+                // Buys/sells below
                 const buys = tx2.buys || 0, sells = tx2.sells || 0;
-                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                jx.fillStyle = "#00ff88"; jx.textAlign = "right";
-                jx.shadowColor = "#00ff88"; jx.shadowBlur = 8;
-                jx.fillText("▲" + buys, clockX2 - 18, midY + 6);
-                jx.shadowBlur = 0;
-                jx.font = `bold ${fSz * 0.6 | 0}px 'JetBrains Mono', monospace`;
-                jx.fillText("$" + (tx2.buyVol || "0") + "K", clockX2 - 18, midY + 42);
-                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                jx.fillStyle = "#ff4444"; jx.textAlign = "left";
-                jx.shadowColor = "#ff4444"; jx.shadowBlur = 8;
-                jx.fillText(sells + "▼", clockX2 + clockW2 + 18, midY + 6);
-                jx.shadowBlur = 0;
-                jx.font = `bold ${fSz * 0.6 | 0}px 'JetBrains Mono', monospace`;
-                jx.fillText("$" + (tx2.sellVol || "0") + "K", clockX2 + clockW2 + 18, midY + 42);
-                // Buy/sell bars
-                const barW2 = clockX2 - pad - 18;
-                jx.fillStyle = "#00ff88";
-                jx.beginPath(); jx.roundRect(pad, midY + 52, barW2, 12, 6); jx.fill();
+                jx.font = `bold ${T_S}px ${F_DATA}`;
+                jx.fillStyle = "#00ff88"; jx.textAlign = "left";
+                jx.fillText("\u25B2" + buys, pad, midY + 38);
                 jx.fillStyle = "#ff4444";
-                jx.beginPath(); jx.roundRect(W - pad - barW2, midY + 52, barW2, 12, 6); jx.fill();
+                jx.fillText("\u25BC" + sells, pad + 120, midY + 38);
                 jx.textAlign = "left";
 
               } else if (side === 1) {
-                // ── BACK: MC · FDV · LIQ · VOL ──
-                jx.textAlign = "left";
-                let rx = pad;
-                const stat = (label, val, color) => {
-                  jx.font = `bold ${fSz * 0.5 | 0}px 'Inter', sans-serif`;
-                  jx.fillStyle = "#666";
-                  jx.fillText(label, rx, midY - 14);
-                  jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                  jx.fillStyle = color || "#fff";
-                  jx.fillText(val, rx, midY + 28);
-                  rx += Math.max(jx.measureText(val).width, 80) + 24;
-                };
-                stat("MC", si.coin.mcap, "#fff");
-                stat("FDV", si.coin.fdv || si.coin.mcap, "#ccc");
-                stat("LIQ", si.coin.liq || "—", "#00d4ff");
-                stat("VOL", si.coin.vol || "—", "#b24dff");
-                // Clock far right
-                jx.font = `bold ${fSz * 1.1 | 0}px 'JetBrains Mono', monospace`;
+                // ── BACK: by [PFP] caller · "thesis..." | timer ──
+                const cy = midY - 6;
+                let rx = drawCaller(pad, cy);
+                rx += 14;
+                if (si.thesis) {
+                  const thesis = si.thesis.length > 40 ? si.thesis.slice(0, 40) + "..." : si.thesis;
+                  jx.font = `italic 500 ${T_S}px ${F_DISPLAY}`;
+                  jx.fillStyle = "#888"; jx.textAlign = "left";
+                  jx.fillText('"' + thesis + '"', rx, cy);
+                }
+                jx.font = `bold ${T_L}px ${F_DATA}`;
                 jx.fillStyle = clockColor; jx.textAlign = "right";
                 jx.shadowColor = clockColor; jx.shadowBlur = 12;
-                jx.fillText(timeStr, W - pad, midY + 22);
+                jx.fillText(timeStr, W - pad, midY + 14);
                 jx.shadowBlur = 0; jx.textAlign = "left";
 
               } else if (side === 2) {
-                // ── LEFT: Supply · Holders · Created ──
-                const holders = tx2.holders ? tx2.holders.toLocaleString() : "—";
-                jx.textAlign = "left";
-                let rx = pad;
-                const stat = (label, val, color) => {
-                  jx.font = `bold ${fSz * 0.5 | 0}px 'Inter', sans-serif`;
-                  jx.fillStyle = "#666";
-                  jx.fillText(label, rx, midY - 14);
-                  jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                  jx.fillStyle = color || "#fff";
-                  jx.fillText(val, rx, midY + 28);
-                  rx += Math.max(jx.measureText(val).width, 80) + 24;
-                };
-                stat("HOLDERS", holders, "#fff");
-                stat("SUPPLY", si.coin.supply || "1B", "#999");
-                stat("LAUNCH", si.coin.launchpad || "—", "#b24dff");
-                // Clock far right
-                jx.font = `bold ${fSz * 1.1 | 0}px 'JetBrains Mono', monospace`;
+                // ── LEFT: Vote bar + % BULLISH + earned | timer ──
+                const totalV3 = vt.up + vt.down || 1;
+                const upPct = vt.up / totalV3;
+                const upP2 = ((upPct) * 100).toFixed(0);
+                const barW3 = W - pad * 2 - 140;
+                jx.font = `bold ${T_L}px ${F_DATA}`;
+                jx.fillStyle = "#00ff88"; jx.textAlign = "left";
+                jx.shadowColor = "#00ff88"; jx.shadowBlur = 8;
+                jx.fillText("\u25B2" + vt.up, pad, midY - 4);
+                jx.shadowBlur = 0;
+                jx.fillStyle = "#fff"; jx.textAlign = "center";
+                jx.font = `bold ${T_M}px ${F_DISPLAY}`;
+                jx.fillText(upP2 + "% BULLISH", pad + barW3 / 2, midY - 4);
+                jx.fillStyle = "#ff4444"; jx.textAlign = "right";
+                jx.font = `bold ${T_L}px ${F_DATA}`;
+                jx.shadowColor = "#ff4444"; jx.shadowBlur = 8;
+                jx.fillText(vt.down + "\u25BC", pad + barW3, midY - 4);
+                jx.shadowBlur = 0;
+                const barH3 = 18, barY3 = midY + 20;
+                jx.fillStyle = "#00ff88";
+                jx.beginPath(); jx.roundRect(pad, barY3, barW3 * upPct - 2, barH3, 6); jx.fill();
+                jx.fillStyle = "#ff4444";
+                jx.beginPath(); jx.roundRect(pad + barW3 * upPct + 2, barY3, barW3 * (1 - upPct) - 2, barH3, 6); jx.fill();
+                const earned = callerEarningsRef.current[si.name] || 0;
+                if (earned > 0) {
+                  jx.font = `bold ${T_M}px ${F_DATA}`;
+                  jx.fillStyle = "#00ff88"; jx.textAlign = "left";
+                  jx.fillText("earned $" + earned.toFixed(2), pad, barY3 + barH3 + 28);
+                }
+                jx.font = `bold ${T_L}px ${F_DATA}`;
                 jx.fillStyle = clockColor; jx.textAlign = "right";
                 jx.shadowColor = clockColor; jx.shadowBlur = 12;
                 jx.fillText(timeStr, W - pad, midY + 22);
                 jx.shadowBlur = 0; jx.textAlign = "left";
 
               } else {
-                // ── RIGHT: Votes bar + Caller earned + clock ──
-                const totalV3 = vt.up + vt.down || 1;
-                const upPct = vt.up / totalV3;
-                const upP2 = ((upPct) * 100).toFixed(0);
-                const barW3 = W - pad * 2 - 140, barH3 = 18, barY3 = midY + 20;
-
-                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                jx.fillStyle = "#00ff88"; jx.textAlign = "left";
-                jx.shadowColor = "#00ff88"; jx.shadowBlur = 8;
-                jx.fillText("▲" + vt.up, pad, midY - 4);
-                jx.shadowBlur = 0;
-                jx.fillStyle = "#fff"; jx.textAlign = "center";
-                jx.font = `bold ${fSz * 0.75 | 0}px 'Inter', sans-serif`;
-                jx.fillText(upP2 + "% BULLISH", pad + barW3 / 2, midY - 4);
-                jx.fillStyle = "#ff4444"; jx.textAlign = "right";
-                jx.font = `bold ${fSz}px 'JetBrains Mono', monospace`;
-                jx.shadowColor = "#ff4444"; jx.shadowBlur = 8;
-                jx.fillText(vt.down + "▼", pad + barW3, midY - 4);
-                jx.shadowBlur = 0;
-
-                // Green/red bar
-                jx.fillStyle = "#00ff88";
-                jx.beginPath(); jx.roundRect(pad, barY3, barW3 * upPct - 2, barH3, 6); jx.fill();
-                jx.fillStyle = "#ff4444";
-                jx.beginPath(); jx.roundRect(pad + barW3 * upPct + 2, barY3, barW3 * (1 - upPct) - 2, barH3, 6); jx.fill();
-
-                // Earnings below bar
-                const earned = callerEarningsRef.current[si.name] || 0;
-                if (earned > 0) {
-                  jx.font = `bold ${fSz * 0.6 | 0}px 'JetBrains Mono', monospace`;
-                  jx.fillStyle = "#00ff88"; jx.textAlign = "left";
-                  jx.fillText("earned $" + earned.toFixed(2), pad, barY3 + barH3 + 28);
+                // ── RIGHT: TOP CALLS leaderboard | timer ──
+                const calls = st.topCallsToday || [];
+                if (calls.length > 0) {
+                  jx.font = `bold ${T_S}px ${F_DISPLAY}`;
+                  jx.fillStyle = "#ff2d78"; jx.textAlign = "left";
+                  jx.fillText("TOP CALLS", pad, midY - 18);
+                  calls.slice(0, 3).forEach((call, idx) => {
+                    const ry = midY + 8 + idx * (T_M * 0.9);
+                    const medals = ["#FFD700", "#C0C0C0", "#CD7F32"];
+                    jx.font = `bold ${T_S}px ${F_DATA}`;
+                    jx.fillStyle = medals[idx] || "#888"; jx.textAlign = "left";
+                    jx.fillText((idx + 1) + ".", pad, ry);
+                    jx.font = `bold ${T_M}px ${F_DISPLAY}`;
+                    jx.fillStyle = "#fff";
+                    jx.fillText(call.ticker + " " + (call.change || ""), pad + 40, ry);
+                  });
+                } else {
+                  jx.font = `500 ${T_S}px ${F_DISPLAY}`;
+                  jx.fillStyle = "#444"; jx.textAlign = "center";
+                  jx.fillText("Waiting for calls...", W / 2, midY);
                 }
-
-                // Clock far right
-                jx.font = `bold ${fSz * 1.1 | 0}px 'JetBrains Mono', monospace`;
+                jx.font = `bold ${T_L}px ${F_DATA}`;
                 jx.fillStyle = clockColor; jx.textAlign = "right";
                 jx.shadowColor = clockColor; jx.shadowBlur = 12;
                 jx.fillText(timeStr, W - pad, midY + 22);
@@ -2547,6 +3378,23 @@ export default function PodiumTeleport({ user, wallets }) {
               renderBotRibbon(f.ctx, f.canvas.width, f.canvas.height, i);
               f.tex.needsUpdate = true;
             });
+
+            // ── LED SCREEN — show intro overlay on top of shader, hide when idle ──
+            if (threeRef.current.ledScreen) {
+              const led = threeRef.current.ledScreen;
+              if (showArenaIntro || showSpeakerIntro) {
+                led.overlay.visible = true;
+                const lx = led.ctx, LW = led.canvas.width, LH = led.canvas.height;
+                if (showArenaIntro) {
+                  renderArenaIntro(lx, LW, LH);
+                } else {
+                  renderIntroFace(lx, LW, LH);
+                }
+                led.tex.needsUpdate = true;
+              } else {
+                led.overlay.visible = false;
+              }
+            }
           }
         }
 
@@ -2678,19 +3526,10 @@ export default function PodiumTeleport({ user, wallets }) {
         } // end 30fps particle gate
 
         // Crowd — Nintendo physics (squash & stretch, head lag, arm follow-through, mini-jumps)
-        const zAxis = new THREE.Vector3(0, 0, 1);
-        const xAxis = new THREE.Vector3(1, 0, 0);
-        const idQ = new THREE.Quaternion();
-        const yAxis = new THREE.Vector3(0, 1, 0);
-        // Pre-compute camera-facing quaternion for head billboarding
-        const camDir = new THREE.Vector3();
-        const headLookQ = new THREE.Quaternion();
-        const headLookMat = new THREE.Matrix4();
-        const bodyFaceQ = new THREE.Quaternion();
-        const bodyArmQ = new THREE.Quaternion();
-        const _origin = new THREE.Vector3(0, 0, 0);
-        const _up = new THREE.Vector3(0, 1, 0);
-        const _headWorld = new THREE.Vector3();
+        // Pre-compute billboard quaternion once from camera (crowd reuses, speaker gets per-position lookAt)
+        camDir.set(camera.position.x, 0, camera.position.z).normalize();
+        headLookMat.lookAt(camDir, _origin, _up);
+        crowdBillboardQ.setFromRotationMatrix(headLookMat);
         for (let i = 0; i < count; i++) {
           const c = chars[i];
 
@@ -2782,9 +3621,15 @@ export default function PodiumTeleport({ user, wallets }) {
           sc.set(sv, sv, sv);
           const headBaseY = isOnStage ? 1.24 : 1.32; // stage head slightly lower to not float
           pos.set(cx + headTilt * 0.12 * pScale, (headBaseY + headBob + jumpH) * pScale + stageY, cz);
-          camDir.set(camera.position.x - pos.x, 0, camera.position.z - pos.z).normalize();
-          headLookMat.lookAt(camDir, _origin, _up);
-          headLookQ.setFromRotationMatrix(headLookMat);
+          if (isOnStage) {
+            // Speaker gets precise per-position lookAt
+            camDir.set(camera.position.x - pos.x, 0, camera.position.z - pos.z).normalize();
+            headLookMat.lookAt(camDir, _origin, _up);
+            headLookQ.setFromRotationMatrix(headLookMat);
+          } else {
+            // Crowd reuses pre-computed billboard quaternion
+            headLookQ.copy(crowdBillboardQ);
+          }
           const tiltQ = q.setFromAxisAngle(zAxis, headTilt * 0.5);
           headLookQ.multiply(tiltQ);
           dm.compose(pos, headLookQ, sc); heads.setMatrixAt(i, dm);
@@ -2854,14 +3699,65 @@ export default function PodiumTeleport({ user, wallets }) {
         aL.instanceMatrix.needsUpdate = true; aR.instanceMatrix.needsUpdate = true;
         lL.instanceMatrix.needsUpdate = true; lR.instanceMatrix.needsUpdate = true;
 
+        // ═══ CROWD EMOTES — green/red pips above heads based on mood ═══
+        if (threeRef.current.emoteUpMeshes) {
+          const eUp = threeRef.current.emoteUpMeshes;
+          const eDown = threeRef.current.emoteDownMeshes;
+          for (let i = 0; i < count; i++) {
+            const c = st.chars[i];
+            if (!c.visible || c.emoteTimer <= 0) {
+              sc.set(0, 0, 0); dm.compose(pos, idQ, sc);
+              eUp.setMatrixAt(i, dm); eDown.setMatrixAt(i, dm);
+              continue;
+            }
+            c.emoteTimer -= dt;
+            const life = c.emoteTimer;
+            // Pop up + float + fade: scale in fast, float up, shrink out
+            const prog = 1 - (life / 1.5); // 0→1 over lifespan
+            const popScale = prog < 0.15 ? prog / 0.15 : prog > 0.7 ? (1 - prog) / 0.3 : 1;
+            const floatY = prog * 0.6; // drift upward
+            const sz = popScale * 0.8;
+            pos.set(c.homeX, 1.8 + floatY, c.homeZ);
+            sc.set(sz, sz, sz);
+            dm.compose(pos, crowdBillboardQ, sc);
+            if (c.emoteType === "up") {
+              eUp.setMatrixAt(i, dm);
+              sc.set(0, 0, 0); dm.compose(pos, idQ, sc); eDown.setMatrixAt(i, dm);
+            } else {
+              eDown.setMatrixAt(i, dm);
+              sc.set(0, 0, 0); dm.compose(pos, idQ, sc); eUp.setMatrixAt(i, dm);
+            }
+          }
+          eUp.instanceMatrix.needsUpdate = true;
+          eDown.instanceMatrix.needsUpdate = true;
+        }
+
         // ═══ THROWABLES — gravity arcs from crowd → speaker ═══
         if (threeRef.current.tomatoMeshes) {
           const throws = throwablesRef.current;
+          const splats = splatsRef.current;
           let tIdx = 0, dIdx = 0;
           for (let i = throws.length - 1; i >= 0; i--) {
             const tr = throws[i];
             tr.life += dt;
-            if (tr.life >= tr.maxLife) { throws.splice(i, 1); continue; }
+            if (tr.life >= tr.maxLife) {
+              // Tomato splat! Juicy burst of particles on impact
+              if (tr.type === "tomato") {
+                for (let s = 0; s < 12; s++) {
+                  if (splats.length >= MAX_SPLATS) splats.shift();
+                  const sp = 1.5 + Math.random() * 4;
+                  const ang = Math.random() * Math.PI * 2;
+                  const elev = (Math.random() - 0.3) * Math.PI * 0.5;
+                  splats.push({
+                    pos: [tr.pos[0], tr.pos[1], tr.pos[2]],
+                    vel: [Math.cos(ang) * Math.cos(elev) * sp, Math.sin(elev) * sp + 2 + Math.random() * 3, Math.sin(ang) * Math.cos(elev) * sp],
+                    life: 0, maxLife: 0.5 + Math.random() * 0.4,
+                    scale: 0.8 + Math.random() * 2.5,
+                  });
+                }
+              }
+              throws.splice(i, 1); continue;
+            }
             tr.pos[0] += tr.vel[0] * dt;
             tr.pos[1] += tr.vel[1] * dt;
             tr.pos[2] += tr.vel[2] * dt;
@@ -2870,10 +3766,26 @@ export default function PodiumTeleport({ user, wallets }) {
             const s = lr < 0.1 ? lr / 0.1 : lr > 0.85 ? (1 - lr) / 0.15 : 1;
             pos.set(tr.pos[0], tr.pos[1], tr.pos[2]);
             sc.set(s, s, s);
-            dm.compose(pos, idQ, sc);
-            if (tr.type === "tomato" && tIdx < MAX_THROWABLES) {
+            if (tr.type === "tomato" && tr.spin && tIdx < MAX_THROWABLES) {
+              // Tumbling spin
+              const spinAng = tr.life * tr.spin;
+              const ax = tr.spinAxis;
+              const axLen = Math.sqrt(ax[0]*ax[0]+ax[1]*ax[1]+ax[2]*ax[2]) || 1;
+              q.setFromAxisAngle(xAxis.set(ax[0]/axLen,ax[1]/axLen,ax[2]/axLen), spinAng);
+              dm.compose(pos, q, sc);
               threeRef.current.tomatoMeshes.setMatrixAt(tIdx++, dm);
+            } else if (tr.type === "tomato" && tIdx < MAX_THROWABLES) {
+              dm.compose(pos, idQ, sc);
+              threeRef.current.tomatoMeshes.setMatrixAt(tIdx++, dm);
+            } else if (tr.type === "diamond" && tr.spin && dIdx < MAX_THROWABLES) {
+              const spinAng = tr.life * tr.spin;
+              const ax = tr.spinAxis;
+              const axLen = Math.sqrt(ax[0]*ax[0]+ax[1]*ax[1]+ax[2]*ax[2]) || 1;
+              q.setFromAxisAngle(xAxis.set(ax[0]/axLen,ax[1]/axLen,ax[2]/axLen), spinAng);
+              dm.compose(pos, q, sc);
+              threeRef.current.diamondMeshes.setMatrixAt(dIdx++, dm);
             } else if (tr.type === "diamond" && dIdx < MAX_THROWABLES) {
+              dm.compose(pos, idQ, sc);
               threeRef.current.diamondMeshes.setMatrixAt(dIdx++, dm);
             }
           }
@@ -2882,6 +3794,30 @@ export default function PodiumTeleport({ user, wallets }) {
           for (let i = dIdx; i < MAX_THROWABLES; i++) threeRef.current.diamondMeshes.setMatrixAt(i, dm);
           threeRef.current.tomatoMeshes.instanceMatrix.needsUpdate = true;
           threeRef.current.diamondMeshes.instanceMatrix.needsUpdate = true;
+
+          // ═══ SPLAT PARTICLES — tomato juice flying outward ═══
+          let sIdx = 0;
+          for (let i = splats.length - 1; i >= 0; i--) {
+            const sp = splats[i];
+            sp.life += dt;
+            if (sp.life >= sp.maxLife) { splats.splice(i, 1); continue; }
+            sp.pos[0] += sp.vel[0] * dt;
+            sp.pos[1] += sp.vel[1] * dt;
+            sp.pos[2] += sp.vel[2] * dt;
+            sp.vel[1] -= 12 * dt; // heavy drip gravity
+            const lr = sp.life / sp.maxLife;
+            const fade = lr < 0.1 ? lr / 0.1 : 1 - (lr - 0.1) / 0.9; // quick in, slow fade
+            const sz = sp.scale * fade;
+            if (sIdx < MAX_SPLATS) {
+              pos.set(sp.pos[0], sp.pos[1], sp.pos[2]);
+              sc.set(sz, sz, sz);
+              dm.compose(pos, idQ, sc);
+              threeRef.current.splatMeshes.setMatrixAt(sIdx++, dm);
+            }
+          }
+          sc.set(0, 0, 0); dm.compose(pos, idQ, sc);
+          for (let i = sIdx; i < MAX_SPLATS; i++) threeRef.current.splatMeshes.setMatrixAt(i, dm);
+          threeRef.current.splatMeshes.instanceMatrix.needsUpdate = true;
         }
 
         renderer.render(scene, camera);
@@ -2911,51 +3847,61 @@ export default function PodiumTeleport({ user, wallets }) {
       window.addEventListener("resize", onR);
       return () => window.removeEventListener("resize", onR);
     }
-    init();
-    return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); if (rendererRef.current?.domElement && container.contains(rendererRef.current.domElement)) { container.removeChild(rendererRef.current.domElement); rendererRef.current.dispose(); } };
+    const cleanupResize = init();
+    return () => { cleanupResize?.(); if (frameRef.current) cancelAnimationFrame(frameRef.current); if (rendererRef.current?.domElement && container.contains(rendererRef.current.domElement)) { container.removeChild(rendererRef.current.domElement); rendererRef.current.dispose(); } };
   }, []);
 
-  // ═══ MIC BUTTON ═══
-  const handleMicTap = useCallback(() => {
+  // ═══ STEP UP (from +CA in console) ═══
+  const handleCallCoin = useCallback(async () => {
     const st = stateRef.current;
-    // If someone is already speaking, show modal to join queue
-    if (st.speaker !== null && st.teleportPhase === "active") {
-      setShowStepUpModal(true);
+    const query = stepUpCA.trim();
+    if (!query) return;
+    const matchedCoin = (
+      stepUpCoinPreview?.ca?.toLowerCase() === query.toLowerCase()
+        ? rememberCoin(stepUpCoinPreview)
+        : await resolveCoin(query)
+    );
+
+    if (!matchedCoin) {
+      setChatMessages((prev) => [...prev, { user: "trench.fm", msg: `Could not find a Solana token for "${query}" yet.` }]);
       return;
     }
-    // Otherwise show modal for direct step-up
-    if (st.teleportPhase === "idle" || st.teleportPhase === "active") {
-      setShowStepUpModal(true);
-    }
-  }, []);
 
-  // ═══ STEP UP (from modal submit) ═══
-  const handleStepUp = useCallback((ca, thesis) => {
-    const st = stateRef.current;
-    // Resolve coin from CA (mock: match or random)
-    const matchedCoin = COINS.find(c => ca.toLowerCase().includes(c.ticker.replace("$","").toLowerCase())) || COINS[Math.floor(Math.random() * COINS.length)];
+    // Auto-generate thesis
+    const thesis = `${matchedCoin.ticker} is looking strong. ${matchedCoin.mcap} mcap, ${matchedCoin.change} today. Loading up.`;
+
+    // ── Anti-spam checks ──
+    const now = Date.now();
+    if (sessionCallCount >= MAX_CALLS_PER_SESSION) {
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `Session call limit reached (${MAX_CALLS_PER_SESSION}). Take a breather.` }]);
+      return;
+    }
+    const recentCalls = callHistory.slice(-5);
+    const avgRoses = recentCalls.length > 0 ? recentCalls.reduce((s, c) => s + (c.roses / Math.max(1, c.roses + c.tomatoes)), 0) / recentCalls.length : 1;
+    const effectiveCooldown = avgRoses < 0.3 ? CALL_COOLDOWN_MS * 2 : CALL_COOLDOWN_MS;
+    if (lastCallTime > 0 && now - lastCallTime < effectiveCooldown) {
+      const remaining = Math.ceil((effectiveCooldown - (now - lastCallTime)) / 1000);
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `Cooldown: wait ${remaining}s before your next call.` }]);
+      return;
+    }
 
     // If speaker active, join queue
     if (st.speaker !== null && st.teleportPhase === "active") {
-      const name = NAMES[Math.floor(Math.random() * NAMES.length)];
+      const name = viewerName;
       setQueue(q => [...q, { name, coin: matchedCoin, thesis }]);
       setChatMessages(p => [...p, { user: "trench.fm", msg: `🎤 ${name} joined the queue (${queue.length + 1} waiting)` }]);
-      setShowStepUpModal(false);
+      setShowCallInput(false);
       setStepUpCA("");
-      setStepUpThesis("");
+      setStepUpCoinPreview(null);
       return;
     }
 
     if (st.teleportPhase !== "idle" && st.teleportPhase !== "active") return;
 
-    // Return prev speaker
-    if (st.speaker !== null) {
-      chars_ref_restore(st);
-    }
+    if (st.speaker !== null) chars_ref_restore(st);
 
     const idx = Math.floor(Math.random() * st.chars.length);
     const c = st.chars[idx];
-
     st.teleportCharIdx = idx;
     st.teleportPhase = "beam_out";
     st.teleportTimer = 0;
@@ -2963,23 +3909,26 @@ export default function PodiumTeleport({ user, wallets }) {
 
     const txStats = { buys: Math.floor(80 + Math.random() * 200), sells: Math.floor(30 + Math.random() * 120), buyVol: (Math.random() * 80 + 10).toFixed(1), sellVol: (Math.random() * 50 + 5).toFixed(1), holders: Math.floor(500 + Math.random() * 3000), topHolding: (15 + Math.random() * 20).toFixed(1) };
     const followers = ["12.5K", "45.2K", "127K", "892K", "33.1K", "8.4K"][Math.floor(Math.random() * 6)];
-    setSpeakerInfo({ name: c.name, coin: matchedCoin, idx, thesis, txStats, followers });
+    const speakerName = viewerName === "you" ? c.name : viewerName;
+    setSpeakerInfo({ name: speakerName, coin: matchedCoin, idx, thesis, txStats, followers, callMcap: matchedCoin.mcap });
+    setCallHistory(prev => [...prev, { caller: speakerName, coinCA: matchedCoin.ca, ticker: matchedCoin.ticker, callMcap: matchedCoin.mcap, callPrice: matchedCoin.price, callTimestamp: Date.now(), thesis, currentMcap: matchedCoin.mcap, roi: 1, roses: 0, tomatoes: 0 }]);
+    setLastCallTime(Date.now());
+    setSessionCallCount(c => c + 1);
     setCardExpanded(false);
-    { const tfd = generateAllTimeframes(matchedCoin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTimeframe]); }
+    { const tfd = generateAllTimeframes(matchedCoin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTFRef.current]); loadRealChart(matchedCoin); }
     setVotes({ up: Math.floor(Math.random() * 20) + 5, down: Math.floor(Math.random() * 5) });
     setUserVoted(null);
-    setShowStepUpModal(false);
+    setShowCallInput(false);
     setStepUpCA("");
-    setStepUpThesis("");
-    // Jumbotron IS the announcement — start intro during teleport
+    setStepUpCoinPreview(null);
     st.jmboIntroTimer = 6.0;
-    st.jmboIntroName = c.name;
+    st.jmboIntroName = speakerName;
     st.jmboIntroTicker = matchedCoin.ticker;
     st.jmboIntroCharIdx = idx;
 
-    setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ ${c.name} is teleporting to the stage...` }]);
-    setTimeout(() => setChatMessages(p => [...p, { user: c.name, msg: `Calling ${matchedCoin.ticker} — ${matchedCoin.mcap} mcap, ${matchedCoin.change}. LFG.` }]), 1500);
-  }, [queue]);
+    setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ ${speakerName} is teleporting to the stage...` }]);
+    setTimeout(() => setChatMessages(p => [...p, { user: speakerName, msg: `Calling ${matchedCoin.ticker} — ${matchedCoin.mcap} mcap, ${matchedCoin.change}. LFG.` }]), 1500);
+  }, [queue.length, rememberCoin, resolveCoin, stepUpCA, stepUpCoinPreview, viewerName]);
 
   function chars_ref_restore(st) {
     if (st.speaker !== null) {
@@ -2990,69 +3939,116 @@ export default function PodiumTeleport({ user, wallets }) {
 
   const handleVote = useCallback((d) => {
     if (userVoted) return;
+    // Check inventory
+    const hasAmmo = d === "up" ? throwInv.roses > 0 : throwInv.tomatoes > 0;
+    if (!hasAmmo) return;
     setUserVoted(d);
     setVotes(p => ({ up: p.up + (d === "up" ? 1 : 0), down: p.down + (d === "down" ? 1 : 0) }));
+    // Consume from inventory
+    setThrowInv(p => ({
+      ...p,
+      roses: d === "up" ? p.roses - 1 : p.roses,
+      tomatoes: d === "down" ? p.tomatoes - 1 : p.tomatoes,
+    }));
+    // Track score for current token
+    const ca = speakerInfo?.coin?.ca;
+    if (ca) {
+      setTokenScores(p => {
+        const cur = p[ca] || { roses: 0, tomatoes: 0 };
+        return { ...p, [ca]: { roses: cur.roses + (d === "up" ? 1 : 0), tomatoes: cur.tomatoes + (d === "down" ? 1 : 0) } };
+      });
+    }
     // Your vote launches a burst of 3 throwables
     spawnThrow(d === "up" ? "diamond" : "tomato", 3);
-  }, [userVoted, spawnThrow]);
+  }, [userVoted, spawnThrow, throwInv, speakerInfo]);
   const handleSend = useCallback(() => {
     if (!chatInput.trim()) return;
-    setChatMessages(p => [...p, { user: "you", msg: chatInput.trim() }]);
+    setChatMessages(p => [...p, { user: viewerName, msg: chatInput.trim() }]);
     setChatInput("");
     // Keep keyboard open — re-focus input after send
     setTimeout(() => chatInputRef.current?.focus(), 10);
-  }, [chatInput]);
-  const handleBuy = useCallback(() => {
-    if (!speakerInfo || !buyAmount) return;
-    const amt = parseFloat(buyAmount);
-    if (isNaN(amt) || amt <= 0 || amt > walletBalance) return;
-    const coin = speakerInfo.coin;
-    const entryPrice = parseFloat(coin.price);
-    const tradeUSD = amt * solPrice; // SOL → USD
-    // Fee flywheel — 1% split: 0.5% platform, 0.3% caller, 0.2% treasury
-    const callerFee = tradeUSD * FEE_CALLER;
-    const platformFee = tradeUSD * FEE_PLATFORM;
-    const callerName = speakerInfo.name;
-    setCallerEarnings(prev => ({ ...prev, [callerName]: (prev[callerName] || 0) + callerFee }));
-    setPlatformRevenue(prev => prev + platformFee);
-    setCallVolume(prev => prev + tradeUSD);
-    setUserPositions(p => [...p, { coin: coin.ticker, amount: amt, entry: entryPrice, current: entryPrice * (1 + (Math.random() * 0.5 - 0.1)), caller: callerName }]);
-    const displayName = privacyMode ? "anon" : "you";
-    setActivityFeed(p => [...p, { user: displayName, action: "bought", amount: `$${tradeUSD.toFixed(0)}`, coin: coin.ticker }]);
-    setChatMessages(p => [
-      ...p,
-      { user: "trench.fm", msg: privacyMode ? `⚡ anon bought ${amt} SOL of ${coin.ticker}` : `⚡ you bought ${amt} SOL of ${coin.ticker}!` },
-      { user: "trench.fm", msg: `💰 ${callerName} earned $${callerFee.toFixed(2)} from this trade` },
-    ]);
-    setBuyAmount("");
-    setShowBuySheet(false);
-    buyFlashRef.current = performance.now() / 1000; // trigger green flash
-    // Floating money celebration
-    const emojis = ["💰", "🤑", "💵", "🚀", "⚡", "💎", "🔥"];
-    const burst = Array.from({ length: 12 }, (_, i) => ({
-      id: Date.now() + i,
-      emoji: emojis[Math.floor(Math.random() * emojis.length)],
-      x: 30 + Math.random() * (window.innerWidth - 100),
-      delay: Math.random() * 0.5,
-      speed: 2 + Math.random() * 3,
-      size: 16 + Math.random() * 14,
-    }));
-    setFloatingEmojis(prev => [...prev, ...burst]);
-    setTimeout(() => setFloatingEmojis(prev => prev.filter(e => !burst.includes(e))), 4000);
-  }, [speakerInfo, buyAmount, walletBalance]);
+  }, [chatInput, viewerName]);
+
+  // ═══ VOICE NOTES — iPhone/Signal hold-to-record ═══
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const dur = (Date.now() - recordingStartRef.current) / 1000;
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        if (blob.size > 0 && dur >= 0.5) {
+          const url = URL.createObjectURL(blob);
+          setChatMessages(p => [...p, { user: viewerName, msg: "Voice note", voiceNote: { url, duration: dur } }]);
+        }
+        setIsRecording(false);
+        setRecordingDuration(0);
+      };
+      mediaRecorderRef.current = recorder;
+      recordingStartRef.current = Date.now();
+      recorder.start();
+      setIsRecording(true);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration((Date.now() - recordingStartRef.current) / 1000);
+      }, 100);
+    } catch (e) {
+      console.warn("[voice] mic access denied:", e.message);
+      setIsRecording(false);
+    }
+  }, [viewerName]);
+
+  const stopRecording = useCallback(() => {
+    if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+  }, []);
+
+  const handleMicDown = useCallback((e) => {
+    e.preventDefault();
+    micHoldTimerRef.current = setTimeout(() => {
+      micHoldTimerRef.current = "recording";
+      startRecording();
+    }, 300);
+  }, [startRecording]);
+
+  const handleMicUp = useCallback(() => {
+    if (micHoldTimerRef.current === "recording" || isRecording) {
+      stopRecording();
+    } else {
+      if (micHoldTimerRef.current) clearTimeout(micHoldTimerRef.current);
+      // Short tap — no action (hold to record)
+    }
+    micHoldTimerRef.current = null;
+  }, [isRecording, stopRecording]);
+
+  const playVoiceNote = useCallback((url) => {
+    if (voiceAudioRef.current) { voiceAudioRef.current.pause(); voiceAudioRef.current = null; }
+    if (playingVoiceNote === url) { setPlayingVoiceNote(null); return; }
+    const audio = new Audio(url);
+    audio.onended = () => { setPlayingVoiceNote(null); voiceAudioRef.current = null; };
+    voiceAudioRef.current = audio;
+    setPlayingVoiceNote(url);
+    audio.play();
+  }, [playingVoiceNote]);
 
   const handleQuickBuy = useCallback(async (usd) => {
-    if (!speakerInfo) return;
-    const coin = speakerInfo.coin;
+    const coin = rememberCoin(selectedCoin || (speakerInfo && speakerInfo.coin));
+    if (!coin) return;
     const solAmt = usdToSol(usd, solPrice);
     if (solAmt > walletBalance) {
-      setChatMessages(p => [...p, { user: "trench.fm", msg: `Insufficient balance — need ${solAmt.toFixed(4)} SOL ($${usd})` }]);
+      setMiniOpen(true);
+      setMiniTab("fund");
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `Need ${(solAmt - walletBalance).toFixed(4)} more SOL to buy $${usd} of ${coin.ticker}` }]);
       return;
     }
 
     // Optimistic UI — close tooltip, show pending
     setShowBuySheet(false);
     setQuickBuyUSD(null);
+    setSelectedCoin(null);
     setTradeStatus("pending");
     setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Swapping $${usd} → ${coin.ticker}...` }]);
 
@@ -3074,13 +4070,39 @@ export default function PodiumTeleport({ user, wallets }) {
 
       // Update local state
       const entryPrice = parseFloat(coin.price);
-      const callerName = speakerInfo.name;
+      const callerName = speakerInfo?.name || "direct";
       const callerFee = usd * FEE_CALLER;
       setCallerEarnings(prev => ({ ...prev, [callerName]: (prev[callerName] || 0) + callerFee }));
       setPlatformRevenue(prev => prev + usd * FEE_PLATFORM);
       setCallVolume(prev => prev + usd);
-      setUserPositions(p => [...p, { coin: coin.ticker, amount: solAmt, entry: entryPrice, current: entryPrice, caller: callerName, txSig: result.signature }]);
-      const displayName = privacyMode ? "anon" : "you";
+      setUserPositions((prev) => {
+        const existing = prev.find((position) => position.mint === coin.ca);
+        const previousCost = existing?.notionalUsd || 0;
+        const nextCost = previousCost + usd;
+        const nextEntry = nextCost > 0
+          ? (((existing?.entry || entryPrice) * previousCost) + (entryPrice * usd)) / nextCost
+          : entryPrice;
+        const nextPosition = {
+          mint: coin.ca,
+          coin: coin.ticker,
+          name: coin.name || existing?.name || coin.ticker,
+          imageUrl: coin.imageUrl || existing?.imageUrl || null,
+          amount: (existing?.amount || 0) + solAmt,
+          notionalUsd: nextCost,
+          entry: nextEntry,
+          current: entryPrice,
+          caller: callerName,
+          txSig: result.signature,
+          tokenAmount: existing?.tokenAmount || null,
+          status: "pending",
+        };
+
+        if (!existing) return [...prev, nextPosition];
+        return prev.map((position) => (
+          position.mint === coin.ca ? nextPosition : position
+        ));
+      });
+      const displayName = privacyMode ? "anon" : viewerName;
       setActivityFeed(p => [...p, { user: displayName, action: "bought", amount: `$${usd}`, coin: coin.ticker }]);
       setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Sent! ${coin.ticker} buy tx: ${result.signature.slice(0, 8)}...` }]);
 
@@ -3100,7 +4122,17 @@ export default function PodiumTeleport({ user, wallets }) {
           pendingSigRef.current = null;
           setTradeStatus("confirmed");
           setTimeout(() => setTradeStatus(null), 3000);
-          try { const w = await getWalletBalance(); setWalletBalance(w.sol); } catch {}
+          setUserPositions((prev) => prev.map((position) => (
+            position.txSig === result.signature
+              ? { ...position, status: "confirmed" }
+              : position
+          )));
+          try {
+            const w = await getWalletBalance();
+            setWalletBalance(w.sol);
+          } catch (error) {
+            console.debug("[frontrun] balance refresh skipped:", error.message);
+          }
         }
       }, 15000);
 
@@ -3112,21 +4144,18 @@ export default function PodiumTeleport({ user, wallets }) {
       setWalletBalance(prev => prev + solAmt);
       setTimeout(() => setTradeStatus(null), 4000);
     }
-  }, [speakerInfo, walletBalance, solPrice, privacyMode]);
+  }, [privacyMode, rememberCoin, selectedCoin, solPrice, speakerInfo, viewerName, walletBalance]);
 
-  const handleSell = useCallback(async (coinTicker) => {
-    const pos = userPositions.find(p => p.coin === coinTicker);
+  const handleSell = useCallback(async (tokenMint) => {
+    const pos = positionsRef.current.find((position) => position.mint === tokenMint);
     if (!pos) return;
-    // Find the token mint from COINS
-    const coinData = COINS.find(c => c.ticker === coinTicker);
-    if (!coinData) return;
 
     setTradeStatus("pending");
-    setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Selling 100% of ${coinTicker}...` }]);
+    setChatMessages(p => [...p, { user: "trench.fm", msg: `⚡ Selling 100% of ${pos.coin}...` }]);
 
     try {
       const result = await executeTrade({
-        tokenMint: coinData.ca,
+        tokenMint,
         side: "SELL",
         sellPercent: 100,
         slippageBasisPoint: 500,
@@ -3136,10 +4165,10 @@ export default function PodiumTeleport({ user, wallets }) {
       pendingSigRef.current = result.signature;
       setLastTxSig(result.signature);
 
-      const pnl = ((pos.current - pos.entry) / pos.entry * 100);
-      setUserPositions(p => p.filter(pp => pp.coin !== coinTicker));
-      setActivityFeed(p => [...p, { user: "you", action: pnl >= 0 ? "up" : "sold", amount: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(0)}%`, coin: coinTicker }]);
-      setChatMessages(p => [...p, { user: "trench.fm", msg: `💰 Sold ${coinTicker} tx: ${result.signature.slice(0, 8)}...` }]);
+      const pnl = pos.entry > 0 ? ((pos.current - pos.entry) / pos.entry) * 100 : 0;
+      setUserPositions(p => p.filter(pp => pp.mint !== tokenMint));
+      setActivityFeed(p => [...p, { user: privacyMode ? "anon" : viewerName, action: pnl >= 0 ? "up" : "sold", amount: `${pnl >= 0 ? "+" : ""}${pnl.toFixed(0)}%`, coin: pos.coin }]);
+      setChatMessages(p => [...p, { user: "trench.fm", msg: `💰 Sold ${pos.coin} tx: ${result.signature.slice(0, 8)}...` }]);
 
       // Refresh balance after a delay (WebSocket or fallback)
       setTimeout(async () => {
@@ -3148,7 +4177,12 @@ export default function PodiumTeleport({ user, wallets }) {
           setTradeStatus("confirmed");
           setTimeout(() => setTradeStatus(null), 3000);
         }
-        try { const w = await getWalletBalance(); setWalletBalance(w.sol); } catch {}
+        try {
+          const w = await getWalletBalance();
+          setWalletBalance(w.sol);
+        } catch (error) {
+          console.debug("[frontrun] balance refresh skipped:", error.message);
+        }
       }, 10000);
 
     } catch (e) {
@@ -3157,16 +4191,59 @@ export default function PodiumTeleport({ user, wallets }) {
       setChatMessages(p => [...p, { user: "trench.fm", msg: `Sell failed: ${e.message}` }]);
       setTimeout(() => setTradeStatus(null), 4000);
     }
-  }, [userPositions]);
+  }, [privacyMode, viewerName]);
 
-  // Simulate position P&L updates
   useEffect(() => {
     if (userPositions.length === 0) return;
-    const i = setInterval(() => {
-      setUserPositions(p => p.map(pos => ({ ...pos, current: pos.entry * (1 + (Math.random() * 0.6 - 0.1)) })));
-    }, 3000);
-    return () => clearInterval(i);
-  }, [userPositions.length]);
+    let dead = false;
+
+    const refreshPrices = async () => {
+      const heldMints = [...new Set(positionsRef.current.map((position) => position.mint).filter(Boolean))];
+      if (heldMints.length === 0) return;
+
+      const refreshedCoins = await Promise.all(heldMints.map(async (mint) => {
+        try {
+          const liveCoin = await lookupToken(mint);
+          return liveCoin ? rememberCoin(liveCoin) : null;
+        } catch (error) {
+          console.debug("[token] position refresh skipped:", error.message);
+          return null;
+        }
+      }));
+
+      if (dead) return;
+
+      const latestByMint = new Map(
+        refreshedCoins
+          .filter(Boolean)
+          .map((coin) => [coin.ca, coin])
+      );
+
+      if (latestByMint.size === 0) return;
+
+      setUserPositions((prev) => prev.map((position) => {
+        const latest = latestByMint.get(position.mint);
+        if (!latest) return position;
+
+        const nextPrice = Number.parseFloat(latest.price);
+        return {
+          ...position,
+          coin: latest.ticker || position.coin,
+          name: latest.name || position.name,
+          imageUrl: latest.imageUrl || position.imageUrl || null,
+          current: Number.isFinite(nextPrice) ? nextPrice : position.current,
+        };
+      }));
+    };
+
+    refreshPrices();
+    const intervalId = setInterval(refreshPrices, 30_000);
+
+    return () => {
+      dead = true;
+      clearInterval(intervalId);
+    };
+  }, [rememberCoin, userPositions.length]);
 
   // ═══ PHYSICS SPIN — flick to spin with momentum + friction ═══
   const onDragStart = useCallback((x, y, e) => {
@@ -3225,15 +4302,18 @@ export default function PodiumTeleport({ user, wallets }) {
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
         @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
         @keyframes slideIn{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+        @keyframes gentleBounce{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}
         @keyframes chartIn{from{transform:scaleX(0);opacity:0}to{transform:scaleX(1);opacity:1}}
         @keyframes ticker{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
         @keyframes modalUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
         @keyframes floatUp{0%{transform:translateY(0) scale(1);opacity:1}100%{transform:translateY(-300px) scale(1.5);opacity:0}}
         @keyframes copyFlash{0%{background:rgba(0,255,136,0.2)}100%{background:transparent}}
         @keyframes liveDot{0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,0.5)}50%{box-shadow:0 0 0 4px rgba(0,255,136,0)}}
+        @keyframes marqueeLight{0%,75%{background-position:200% 50%}100%{background-position:-100% 50%}}
         @keyframes announceOverlay{0%{opacity:0}8%{opacity:1}75%{opacity:1}100%{opacity:0}}
         @keyframes announceLine{0%{width:0}15%{width:100%}75%{width:100%}100%{width:0}}
         @keyframes announceLabel{0%{opacity:0;transform:translateY(10px)}10%{opacity:1;transform:translateY(0)}75%{opacity:1;transform:translateY(0)}90%{opacity:0;transform:translateY(-5px)}}
@@ -3248,9 +4328,28 @@ export default function PodiumTeleport({ user, wallets }) {
         @keyframes buyGlow{0%,100%{box-shadow:0 0 8px rgba(0,255,136,0.3)}50%{box-shadow:0 0 20px rgba(0,255,136,0.5)}}
         @keyframes micGlow{0%,100%{box-shadow:0 0 8px rgba(255,45,120,0.3)}50%{box-shadow:0 0 20px rgba(255,45,120,0.5)}}
         @keyframes chatSlideIn{from{transform:translateX(-16px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes chartShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
         @keyframes consoleUp{from{transform:translateY(100%);opacity:0.8}to{transform:translateY(0);opacity:1}}
         @keyframes tabSlide{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
         @keyframes consoleGlow{0%,100%{box-shadow:0 0 8px rgba(0,212,255,0.3)}50%{box-shadow:0 0 20px rgba(0,212,255,0.5)}}
+        @keyframes consoleHello{
+          0%{opacity:0;transform:translateY(80px) scale(0.7) rotate(2deg);filter:blur(6px)}
+          25%{opacity:0.6;transform:translateY(-8px) scale(1.02) rotate(-0.5deg);filter:blur(0)}
+          42%{opacity:0.9;transform:translateY(4px) scale(0.99) rotate(0.3deg);filter:blur(0)}
+          58%{opacity:1;transform:translateY(-2px) scale(1.005) rotate(0deg);filter:blur(0)}
+          72%{transform:translateY(1px) scale(1) rotate(0deg)}
+          100%{opacity:1;transform:translateY(0) scale(1) rotate(0deg);filter:blur(0)}
+        }
+        @keyframes consoleShimmer{
+          0%{background-position:-200% 0}
+          100%{background-position:200% 0}
+        }
+        @keyframes chatHello{
+          0%{opacity:0;transform:translateX(-40px) scale(0.9)}
+          40%{opacity:0.8;transform:translateX(4px) scale(1.01)}
+          70%{opacity:1;transform:translateX(-1px) scale(1)}
+          100%{opacity:1;transform:translateX(0) scale(1)}
+        }
         @keyframes curtainSwayL{
           0%{transform:translateX(0) scaleX(1)}
           12%{transform:translateX(1.8%) scaleX(1.008)}
@@ -3304,6 +4403,10 @@ export default function PodiumTeleport({ user, wallets }) {
           0%{opacity:1}
           30%{opacity:1.5}
           100%{opacity:0}
+        }
+        @keyframes recordPulse{
+          0%,100%{box-shadow:0 0 8px rgba(255,45,120,0.3);transform:scale(1)}
+          50%{box-shadow:0 0 22px rgba(255,45,120,0.6);transform:scale(1.12)}
         }
         .chat-input:focus{border-color:rgba(255,45,120,0.5)!important;box-shadow:0 0 12px rgba(255,45,120,0.2)!important;background:rgba(255,45,120,0.04)!important}
       `}</style>
@@ -3361,18 +4464,41 @@ export default function PodiumTeleport({ user, wallets }) {
           <div style={{ position: "absolute", top: 0, left: "47.5%", width: "5%", height: "100%", background: "linear-gradient(180deg, rgba(0,212,255,0.02) 0%, rgba(255,45,120,0.06) 20%, rgba(0,212,255,0.04) 45%, rgba(255,45,120,0.06) 70%, rgba(0,212,255,0.03) 100%)", boxShadow: "0 0 60px 25px rgba(255,45,120,0.06), 0 0 120px 50px rgba(0,212,255,0.04)", animation: curtainsOpen ? "curtainGlowFade 1.5s ease-out forwards" : "curtainGlowPulse 5s ease-in-out infinite", mixBlendMode: "screen", zIndex: 1 }} />
           <div style={{ position: "absolute", top: "5%", left: "49.5%", width: "1%", height: "90%", background: "linear-gradient(180deg, transparent 0%, rgba(255,45,120,0.15) 15%, rgba(0,212,255,0.2) 45%, rgba(255,45,120,0.15) 80%, transparent 100%)", borderRadius: 3, filter: "blur(3px)", animation: curtainsOpen ? "curtainGlowFade 1.2s ease-out forwards" : "curtainGlowPulse 3.5s ease-in-out infinite 0.8s", mixBlendMode: "screen", zIndex: 1 }} />
           {/* UI overlay — fades out when opening */}
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 3, gap: 16, ...(curtainsOpen ? { animation: "curtainFadeUI 0.5s ease-out forwards", pointerEvents: "none" } : {}) }}>
-            <div style={{ position: "relative", marginBottom: 4 }}>
-              <div style={{ fontFamily: "'Press Start 2P'", fontSize: 22, letterSpacing: 2, color: "transparent", background: "linear-gradient(135deg, #ff2d78, #ff6622, #ff2d78)", backgroundSize: "200% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", filter: "drop-shadow(0 0 16px rgba(255,45,120,0.5)) drop-shadow(0 0 40px rgba(255,45,120,0.2))" }}>trench.fm</div>
-              <div style={{ position: "absolute", top: 1, left: 1, fontFamily: "'Press Start 2P'", fontSize: 22, letterSpacing: 2, color: "rgba(0,0,0,0.8)", filter: "blur(4px)", zIndex: -1 }}>trench.fm</div>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 3, gap: 0, ...(curtainsOpen ? { animation: "curtainFadeUI 0.5s ease-out forwards", pointerEvents: "none" } : {}) }}>
+            {/* ── Ambient warm halo — theater spotlight on velvet ── */}
+            <div style={{ position: "absolute", top: "35%", left: "25%", right: "25%", bottom: "35%", background: "radial-gradient(ellipse at 50% 45%, rgba(212,168,130,0.07) 0%, rgba(180,120,90,0.03) 50%, transparent 75%)", filter: "blur(50px)", pointerEvents: "none" }} />
+            {/* ── Logo mark ── */}
+            <div style={{ position: "relative", marginBottom: 16 }}>
+              {/* Backlight — warm amber, like marquee lighting hitting velvet */}
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", width: "120%", height: "300%", background: "radial-gradient(ellipse, rgba(210,160,120,0.1) 0%, rgba(180,130,100,0.04) 40%, transparent 70%)", filter: "blur(25px)", pointerEvents: "none" }} />
+              {/* Logo text — rose gold base, single theatrical spotlight sweep */}
+              <div style={{
+                fontFamily: "'Inter'", fontSize: 34, fontWeight: 400, letterSpacing: 14, textTransform: "lowercase",
+                color: "transparent",
+                background: "linear-gradient(105deg, #b89a7e 0%, #c4a88e 20%, #d4bca6 35%, #f2e8de 44%, #ffffff 50%, #f2e8de 56%, #d4bca6 65%, #c4a88e 80%, #b89a7e 100%)",
+                backgroundSize: "400% 100%",
+                animation: "marqueeLight 12s cubic-bezier(0.4, 0, 0.2, 1) infinite",
+                WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                filter: "drop-shadow(0 2px 12px rgba(180,130,90,0.25))",
+              }}>trench.fm</div>
             </div>
-            <div style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 400, letterSpacing: 3, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", marginBottom: 6 }}>live crypto calls</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 28, padding: "6px 14px", borderRadius: 20, background: "rgba(0,255,136,0.04)", border: "1px solid rgba(0,255,136,0.15)" }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00ff88", animation: "liveDot 2s infinite", boxShadow: "0 0 6px rgba(0,255,136,0.6)" }} />
-              <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: "#00ff88", letterSpacing: -0.3, textShadow: "0 0 8px rgba(0,255,136,0.5)" }}>{liveCount} listening</span>
+            {/* ── Hairline rule — gold thread ── */}
+            <div style={{ width: 80, height: "0.5px", background: "linear-gradient(90deg, transparent 0%, rgba(196,168,142,0.4) 30%, rgba(210,180,150,0.6) 50%, rgba(196,168,142,0.4) 70%, transparent 100%)", marginBottom: 16 }} />
+            {/* ── Descriptor ── */}
+            <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 300, letterSpacing: 5, color: "rgba(196,168,142,0.45)", textTransform: "uppercase", marginBottom: 10 }}>live crypto calls</div>
+            {/* ── Live indicator — understated ── */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 36 }}>
+              <div style={{ width: 4, height: 4, borderRadius: "50%", background: "rgba(0,255,136,0.7)", animation: "liveDot 2.5s ease-in-out infinite", boxShadow: "0 0 4px rgba(0,255,136,0.4)" }} />
+              <span style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 400, color: "rgba(0,255,136,0.4)", letterSpacing: 1.5 }}>{liveCount} listening</span>
             </div>
-            <button onClick={() => { setCurtainsOpen(true); curtainTimerRef.current = setTimeout(() => setSceneReady(true), 2800); }} style={{ fontFamily: "'Press Start 2P'", fontSize: 10, letterSpacing: 1, color: "#fff", background: "rgba(255,45,120,0.12)", border: "1px solid rgba(255,45,120,0.45)", borderRadius: 24, padding: "14px 32px", cursor: "pointer", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", animation: "curtainEnterPulse 3s ease-in-out infinite", transition: "all 0.3s cubic-bezier(0.2, 0, 0.2, 1)", textShadow: "0 0 12px rgba(255,45,120,0.5)" }} onMouseEnter={e => { e.target.style.background = "rgba(255,45,120,0.25)"; e.target.style.transform = "scale(1.06)"; e.target.style.borderColor = "rgba(255,45,120,0.7)"; }} onMouseLeave={e => { e.target.style.background = "rgba(255,45,120,0.12)"; e.target.style.transform = "scale(1)"; e.target.style.borderColor = "rgba(255,45,120,0.45)"; }}>Enter the Trench</button>
-            <button onClick={() => { setCurtainsOpen(true); curtainTimerRef.current = setTimeout(() => setSceneReady(true), 2800); }} style={{ fontFamily: "'Inter'", fontSize: 11, fontWeight: 500, letterSpacing: 0.5, color: "rgba(255,255,255,0.4)", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "8px 20px", marginTop: 4, cursor: "pointer", transition: "all 0.2s ease" }} onMouseEnter={e => { e.target.style.color = "rgba(255,255,255,0.7)"; e.target.style.borderColor = "rgba(255,255,255,0.25)"; }} onMouseLeave={e => { e.target.style.color = "rgba(255,255,255,0.4)"; e.target.style.borderColor = "rgba(255,255,255,0.1)"; }}>Spectate</button>
+            {/* ── Enter — barely there, the curtain gap is the real invitation ── */}
+            <button onClick={() => { setCurtainsOpen(true); curtainTimerRef.current = setTimeout(() => setSceneReady(true), 2800); }} style={{
+              fontFamily: "'Inter'", fontSize: 10, fontWeight: 300, letterSpacing: 5, textTransform: "lowercase",
+              color: "rgba(210,180,150,0.5)", background: "transparent",
+              border: "1px solid rgba(196,168,142,0.15)", borderRadius: 0, padding: "12px 36px",
+              cursor: "pointer",
+              transition: "all 0.6s cubic-bezier(0.16, 1, 0.3, 1)",
+            }} onMouseEnter={e => { e.target.style.color = "rgba(242,232,222,0.9)"; e.target.style.borderColor = "rgba(210,180,150,0.4)"; e.target.style.boxShadow = "0 0 30px rgba(180,130,90,0.1)"; e.target.style.letterSpacing = "7px"; }} onMouseLeave={e => { e.target.style.color = "rgba(210,180,150,0.5)"; e.target.style.borderColor = "rgba(196,168,142,0.15)"; e.target.style.boxShadow = "none"; e.target.style.letterSpacing = "5px"; }}>enter</button>
           </div>
         </div>
       )}
@@ -3380,8 +4506,16 @@ export default function PodiumTeleport({ user, wallets }) {
       {/* TOP BAR — transparent, text glows over Anadol */}
       <div data-ui="1" style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, padding: "10px 14px", background: "none", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: hudVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
         <div style={{ position: "relative" }}>
-          <div style={{ fontFamily: "'Press Start 2P'", fontSize: 13, color: "transparent", background: "linear-gradient(135deg,#ff2d78,#ff6622)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: 1, filter: `hue-rotate(${((stateRef.current?.domeHueShift || 0) + (stateRef.current?.clock || 0) * 0.0083) * 360 % 360}deg)`, position: "relative", zIndex: 1 }}>trench.fm</div>
-          <div style={{ position: "absolute", top: 0, left: 0, fontFamily: "'Press Start 2P'", fontSize: 13, color: "#000", letterSpacing: 1, zIndex: 0, textShadow: "0 0 12px rgba(0,0,0,0.9), 0 0 24px rgba(0,0,0,0.7), 0 0 40px rgba(0,0,0,0.5)" }}>trench.fm</div>
+          <div style={{
+            fontFamily: "'Inter'", fontSize: 13, fontWeight: 400, letterSpacing: 3,
+            color: "transparent",
+            background: "linear-gradient(105deg, #b89a7e, #d4bca6 40%, #f2e8de 50%, #d4bca6 60%, #b89a7e)",
+            backgroundSize: "400% 100%",
+            animation: "marqueeLight 14s cubic-bezier(0.4, 0, 0.2, 1) infinite",
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+            filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.6))",
+            position: "relative", zIndex: 1,
+          }}>trench.fm</div>
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
           {queue.length > 0 && (
@@ -3394,9 +4528,10 @@ export default function PodiumTeleport({ user, wallets }) {
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00ff88", animation: "liveDot 2s infinite", boxShadow: "0 0 6px rgba(0,255,136,0.6)" }} />
             <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 600, color: "#00ff88", letterSpacing: -0.3, textShadow: "0 0 6px rgba(0,255,136,0.4)" }}>{liveCount}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(10,0,8,0.45)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.1)" }}>
-            <Icon d={Icons.wallet} size={11} color="#aaa" />
-            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 600, color: "#ccc", letterSpacing: -0.3, textShadow: "0 0 4px rgba(255,255,255,0.2)" }}>{walletBalance.toFixed(walletBalance < 1 ? 4 : 2)}</span>
+          <div onClick={() => { setMiniOpen(true); setMiniTab("fund"); }} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(10,0,8,0.45)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", cursor: "pointer", border: walletBalance === 0 ? "1px solid rgba(0,212,255,0.3)" : "1px solid rgba(255,255,255,0.1)", boxShadow: walletBalance === 0 ? "0 0 8px rgba(0,212,255,0.15)" : "none", transition: "all 0.2s" }}>
+            {walletBalance === 0 && <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#00d4ff", boxShadow: "0 0 6px #00d4ff", animation: "pulse 2s infinite" }} />}
+            <Icon d={Icons.wallet} size={11} color={walletBalance === 0 ? "#00d4ff" : "#aaa"} />
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 600, color: walletBalance === 0 ? "#00d4ff" : "#ccc", letterSpacing: -0.3, textShadow: walletBalance === 0 ? "0 0 6px rgba(0,212,255,0.4)" : "0 0 4px rgba(255,255,255,0.2)" }}>{walletBalance === 0 ? "Fund" : walletBalance.toFixed(walletBalance < 1 ? 4 : 2)}</span>
           </div>
         </div>
       </div>
@@ -3418,12 +4553,12 @@ export default function PodiumTeleport({ user, wallets }) {
       ))}
 
       {/* ═══ SPEECH BUBBLE — inline like chat: "name · thesis..." ═══ */}
-      {speakerInfo?.thesis && speakerScreenPos && (stateRef.current?.jmboIntroTimer || 0) <= 0 && typewriterIdx > 0 && (
+      {speakerInfo?.thesis && speakerScreenPos && (stateRef.current?.jmboIntroTimer || 0) <= 0 && stateRef.current?.teleportPhase === "active" && typewriterIdx > 0 && (
         <div data-ui="1" onMouseEnter={() => typewriterDone && setBubbleExpanded(true)} onMouseLeave={() => typewriterDone && setBubbleExpanded(false)} style={{
           position: "absolute",
-          left: Math.max(10, Math.min(speakerScreenPos.x - 160, window.innerWidth - 330)),
-          top: Math.max(50, speakerScreenPos.y - 45),
-          maxWidth: (typewriterDone && !bubbleExpanded) ? 320 : 340,
+          left: Math.max(8, Math.min(speakerScreenPos.x - 140, window.innerWidth - 300)),
+          top: Math.max(40, speakerScreenPos.y - 36),
+          maxWidth: (typewriterDone && !bubbleExpanded) ? 280 : 300,
           zIndex: 8,
           pointerEvents: "auto",
           cursor: "default",
@@ -3431,14 +4566,14 @@ export default function PodiumTeleport({ user, wallets }) {
           background: "rgba(12,6,16,0.85)",
           backdropFilter: "blur(14px)",
           WebkitBackdropFilter: "blur(14px)",
-          borderRadius: 10,
-          padding: "8px 14px",
-          border: "1px solid rgba(255,255,255,0.1)",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+          borderRadius: 8,
+          padding: "5px 10px",
+          border: "1.5px solid rgba(255,255,255,0.12)",
+          boxShadow: "0 3px 12px rgba(0,0,0,0.4)",
           fontFamily: "'Inter'",
-          fontSize: 14,
-          lineHeight: 1.4,
-          letterSpacing: -0.2,
+          fontSize: 11,
+          lineHeight: 1.35,
+          letterSpacing: -0.15,
           transition: "max-width 0.4s ease",
           ...((typewriterDone && !bubbleExpanded) ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}),
         }}>
@@ -3448,30 +4583,84 @@ export default function PodiumTeleport({ user, wallets }) {
             {(typewriterDone && !bubbleExpanded) ? speakerInfo.thesis : speakerInfo.thesis.slice(0, typewriterIdx)}
           </span>
           {!typewriterDone && <span style={{ color: "#ff2d78", animation: "blink 0.6s step-end infinite", fontWeight: 700 }}>|</span>}
+          {/* Caret pointing down — centered with border */}
+          <div style={{
+            position: "absolute",
+            bottom: -7,
+            left: "50%", transform: "translateX(-50%)",
+            width: 0, height: 0,
+            borderLeft: "7px solid transparent",
+            borderRight: "7px solid transparent",
+            borderTop: "7px solid rgba(255,255,255,0.12)",
+          }} />
+          <div style={{
+            position: "absolute",
+            bottom: -5,
+            left: "50%", transform: "translateX(-50%)",
+            width: 0, height: 0,
+            borderLeft: "5px solid transparent",
+            borderRight: "5px solid transparent",
+            borderTop: "5px solid rgba(12,6,16,0.85)",
+          }} />
         </div>
       )}
 
-      {/* ═══ FLOATING CHAT — glass pill HUD feed (tap to expand history) ═══ */}
-      <div data-ui="1" onClick={() => setChatExpanded(p => !p)} style={{ position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 8, padding: "0 10px", display: consoleOpen ? "none" : "flex", flexDirection: "column", gap: 2, maxHeight: chatExpanded ? "60vh" : 160, overflow: chatExpanded ? "auto" : "hidden", maskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", WebkitMaskImage: chatExpanded ? "none" : "linear-gradient(to bottom,transparent 0%,black 20%,black 100%)", scrollbarWidth: "none", msOverflowStyle: "none", transition: "max-height 0.3s ease, opacity 0.8s ease", WebkitOverflowScrolling: "touch", opacity: hudVisible ? 1 : 0, pointerEvents: hudVisible ? "auto" : "none" }}>
-        {(chatExpanded ? chatMessages : chatMessages.slice(-10)).map((m, i, arr) => {
-          const userColor = m.user === "trench.fm" ? "#ff2d78" : m.user === "you" ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`;
+      {/* ═══ CHAT FEED — TikTok Live style floating pills ═══ */}
+      <div data-ui="1" style={{
+        position: "absolute", bottom: 46, left: 4, width: "46%", zIndex: 8,
+        padding: "0 2px",
+        display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 3,
+        maxHeight: "55vh", overflow: "auto",
+        background: "transparent",
+        maskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.4) 8%, rgba(0,0,0,0.75) 15%, black 25%, black 100%)",
+        WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.4) 8%, rgba(0,0,0,0.75) 15%, black 25%, black 100%)",
+        scrollbarWidth: "none", msOverflowStyle: "none",
+        WebkitOverflowScrolling: "touch",
+        opacity: hudVisible ? 1 : 0, pointerEvents: hudVisible ? "auto" : "none",
+        animation: hudVisible ? "chatHello 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards" : "none",
+      }}>
+        {chatMessages.slice(-30).map((m, i) => {
+          const isSystem = m.user === "trench.fm";
+          const isMe = m.user === viewerName;
+          const userColor = isSystem ? "#ff2d78" : isMe ? "#00ff88" : `hsl(${(m.user.charCodeAt(0) * 47 + m.user.charCodeAt(m.user.length - 1) * 83) % 360},65%,60%)`;
           return (
-            <div key={chatExpanded ? i : chatMessages.length - 10 + i} style={{
-              padding: "4px 10px 4px 8px",
-              background: "rgba(10,4,14,0.55)",
-              backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)",
-              borderRadius: 8,
-              borderLeft: `2px solid ${userColor}`,
+            <div key={chatMessages.length - 30 + i} style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              padding: "4px 10px 4px 4px",
+              background: isSystem ? "rgba(255,45,120,0.12)" : "rgba(0,0,0,0.35)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              borderRadius: 20,
               alignSelf: "flex-start",
-              maxWidth: "88%",
-              animation: chatExpanded ? "none" : `chatBubbleUp 6s ease-out forwards`,
-              opacity: chatExpanded ? 0.9 : 0,
-              boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-              fontFamily: "'Inter'", fontSize: 12, lineHeight: 1.35, letterSpacing: -0.2,
+              maxWidth: "95%",
+              animation: "chatSlideIn 0.3s ease-out",
+              fontFamily: "'Inter'", fontSize: 12, lineHeight: 1.3, letterSpacing: -0.2,
             }}>
-              <span style={{ color: userColor, fontWeight: 700, fontSize: 11 }}>{m.user}</span>
-              <span style={{ color: "#555", margin: "0 5px" }}>·</span>
-              <span style={{ color: "rgba(255,255,255,0.75)", fontWeight: 400 }}>{m.msg}</span>
+              {(() => { const pfpIdx = PFP_NAMES.indexOf(m.user); const ext = m.user === "ultra" ? "png" : "jpg"; return pfpIdx >= 0 ? <img src={`/pfp/${m.user}.${ext}`} style={{ width: 18, height: 18, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: `1.5px solid ${userColor}40` }} /> : <div style={{ width: 18, height: 18, borderRadius: "50%", background: `${userColor}25`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontWeight: 800, fontSize: 8, color: userColor }}>{m.user[0]?.toUpperCase()}</div>; })()}
+              <span style={{ color: userColor, fontWeight: 700, fontSize: 11, flexShrink: 0 }}>{m.user}</span>
+              {m.voiceNote ? (() => {
+                const vn = m.voiceNote;
+                const playing = playingVoiceNote === vn.url;
+                const durSec = Math.floor(vn.duration);
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer" }} onClick={() => playVoiceNote(vn.url)}>
+                    <div style={{ width: 18, height: 18, borderRadius: "50%", background: `${userColor}25`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all 0.2s" }}>
+                      <Icon d={playing ? Icons.pause : Icons.play} size={8} color={userColor} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 1, height: 14 }}>
+                      {Array.from({ length: 16 }, (_, j) => {
+                        const h = 3 + Math.abs(Math.sin(j * 0.8 + (m.user.charCodeAt(0) || 0) * 0.3 + j * 0.2)) * 8;
+                        return <div key={j} style={{ width: 1.5, height: h, borderRadius: 1, background: playing ? userColor : `${userColor}50`, transition: "background 0.3s" }} />;
+                      })}
+                    </div>
+                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 9, color: "rgba(255,255,255,0.35)", flexShrink: 0, letterSpacing: -0.3 }}>
+                      {Math.floor(durSec / 60)}:{String(durSec % 60).padStart(2, "0")}
+                    </span>
+                  </div>
+                );
+              })() : (
+                <span style={{ color: "rgba(255,255,255,0.75)", fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.msg}</span>
+              )}
             </div>
           );
         })}
@@ -3500,413 +4689,644 @@ export default function PodiumTeleport({ user, wallets }) {
         </div>
       )}
 
-      {/* ═══ FLOATING VOTE BUTTONS — above bottom bar/console when speaker active ═══ */}
+      {/* ═══ VOTE BUTTONS — TikTok-style vertical stack, right edge ═══ */}
       {speakerInfo && (
-        <div data-ui="1" style={{ position: "absolute", bottom: consoleOpen ? "calc(45vh + 58px)" : 62, right: 10, zIndex: 12, display: "flex", gap: 6, opacity: hudVisible ? 1 : 0, transition: "all 0.3s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
-          <div style={{ position: "relative" }}>
-            <button onClick={() => handleVote("up")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "up" ? "#00ff88" : "rgba(0,255,136,0.15)"}`, background: userVoted === "up" ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(10,4,14,0.7)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: userVoted && userVoted !== "up" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "up" ? "0 0 16px rgba(0,255,136,0.4)" : "0 2px 8px rgba(0,0,0,0.3)" }}>
-              <Icon d={Icons.rocket} size={15} color={userVoted === "up" ? "#000" : "#00ff88"} />
+        <div data-ui="1" style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", zIndex: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, opacity: hudVisible ? 1 : 0, transition: "all 0.3s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
+          {/* Rose (upvote) */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <button onClick={() => handleVote("up")} style={{
+              width: 42, height: 42, borderRadius: "50%", border: "none", cursor: "pointer",
+              background: userVoted === "up" ? "rgba(0,255,136,0.15)" : "transparent",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+              transform: userVoted === "up" ? "scale(1.15)" : "scale(1)",
+              filter: userVoted === "up" ? "drop-shadow(0 0 8px rgba(0,255,136,0.4))" : "none",
+              opacity: userVoted === "down" ? 0.25 : throwInv.roses === 0 && !userVoted ? 0.3 : 0.7,
+            }}>
+              <Icon d={Icons.arrowUp} size={22} color={userVoted === "up" ? "#00ff88" : "rgba(255,255,255,0.5)"} />
             </button>
-            {votes.up > 0 && <div style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, background: "#00ff88", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px", boxShadow: "0 0 6px rgba(0,255,136,0.5)" }}><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: "#000", letterSpacing: -0.5 }}>{votes.up > 999 ? "1k+" : votes.up}</span></div>}
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: userVoted === "up" ? "#00ff88" : "rgba(255,255,255,0.25)", letterSpacing: -0.5 }}>{votes.up}</span>
           </div>
-          <div style={{ position: "relative" }}>
-            <button onClick={() => handleVote("down")} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${userVoted === "down" ? "#ff4444" : "rgba(255,68,68,0.12)"}`, background: userVoted === "down" ? "linear-gradient(135deg,#ff4444,#cc2222)" : "rgba(10,4,14,0.7)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: userVoted && userVoted !== "down" ? 0.3 : 1, transition: "all 0.2s", boxShadow: userVoted === "down" ? "0 0 16px rgba(255,68,68,0.4)" : "0 2px 8px rgba(0,0,0,0.3)" }}>
-              <Icon d={Icons.skull} size={15} color={userVoted === "down" ? "#fff" : "#ff4444"} />
+          {/* Freshness % */}
+          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 800, color: vr >= 50 ? "rgba(0,255,136,0.5)" : "rgba(255,68,68,0.5)", letterSpacing: -0.3 }}>{vr.toFixed(0)}%</span>
+          {/* Tomato (downvote) */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <button onClick={() => handleVote("down")} style={{
+              width: 42, height: 42, borderRadius: "50%", border: "none", cursor: "pointer",
+              background: userVoted === "down" ? "rgba(255,68,68,0.15)" : "transparent",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+              transform: userVoted === "down" ? "scale(1.15)" : "scale(1)",
+              filter: userVoted === "down" ? "drop-shadow(0 0 8px rgba(255,68,68,0.4))" : "none",
+              opacity: userVoted === "up" ? 0.25 : throwInv.tomatoes === 0 && !userVoted ? 0.3 : 0.7,
+            }}>
+              <Icon d={Icons.arrowDown} size={22} color={userVoted === "down" ? "#ff4444" : "rgba(255,255,255,0.5)"} />
             </button>
-            {votes.down > 0 && <div style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, background: "#ff4444", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px", boxShadow: "0 0 6px rgba(255,68,68,0.5)" }}><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{votes.down > 999 ? "1k+" : votes.down}</span></div>}
-          </div>
-          {/* Bullish % pill */}
-          <div style={{ height: 38, padding: "0 10px", borderRadius: 10, background: "rgba(10,4,14,0.7)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 4, boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
-            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: vr >= 50 ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{vr.toFixed(0)}%</span>
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: userVoted === "down" ? "#ff4444" : "rgba(255,255,255,0.25)", letterSpacing: -0.5 }}>{votes.down}</span>
           </div>
         </div>
       )}
 
-      {/* ═══ BOTTOM BAR — 2026 glassmorphism + neon glow ═══ */}
-      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, background: "rgba(6,2,10,0.65)", backdropFilter: "blur(20px) saturate(1.4)", WebkitBackdropFilter: "blur(20px) saturate(1.4)", borderTop: "1px solid rgba(255,45,120,0.12)", paddingBottom: "max(6px, env(safe-area-inset-bottom))", boxShadow: "0 -4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)", opacity: hudVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
-        <div style={{ display: "flex", gap: 4, padding: "7px 8px", alignItems: "center" }}>
-          {/* Chat input */}
-          <input ref={chatInputRef} className="chat-input" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say something..." style={{ flex: 1, minWidth: 0, padding: "9px 12px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2, transition: "all 0.25s ease" }} />
-          {/* Console button — cyan, toggles panel */}
-          <button onClick={() => { setConsoleOpen(p => { if (!p) { setShowBuySheet(false); setQuickBuyUSD(null); setShowStepUpModal(false); } return !p; }); }} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${consoleOpen ? "#00d4ff" : "rgba(0,212,255,0.15)"}`, background: consoleOpen ? "rgba(0,212,255,0.12)" : "rgba(0,212,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: consoleOpen ? "consoleGlow 2s ease infinite" : "none", boxShadow: consoleOpen ? "0 0 16px rgba(0,212,255,0.3)" : "none" }}>
-            <Icon d={Icons.barChart} size={15} color={consoleOpen ? "#00d4ff" : "rgba(0,212,255,0.6)"} />
-          </button>
-          {/* Buy/Sell */}
-          {speakerInfo && userPositions.some(p => p.coin === speakerInfo.coin.ticker) ? (
-            <>
-              <button onClick={(e) => { e.stopPropagation(); handleSell(speakerInfo.coin.ticker); }} style={{ height: 38, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(255,68,68,0.25)", background: "rgba(255,68,68,0.08)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, transition: "all 0.2s", letterSpacing: -0.3 }}>Sell</button>
-              <button onClick={(e) => { e.stopPropagation(); setConsoleOpen(false); setShowBuySheet(true); }} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#00ff88,#00cc66)", color: "#000", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", letterSpacing: -0.3, animation: "buyGlow 2s ease infinite", boxShadow: "0 0 12px rgba(0,255,136,0.3)" }}>
-                <Icon d={Icons.zap} size={15} color="#000" />
-              </button>
-            </>
-          ) : (
-            <button onClick={() => { if (speakerInfo) { setConsoleOpen(false); setShowBuySheet(true); } }} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: speakerInfo ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.08)", color: speakerInfo ? "#000" : "#00ff8844", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: !speakerInfo ? 0.3 : 1, transition: "all 0.2s", animation: speakerInfo ? "buyGlow 2s ease infinite" : "none", boxShadow: speakerInfo ? "0 0 12px rgba(0,255,136,0.3)" : "none" }}>
-              <Icon d={Icons.zap} size={15} color={speakerInfo ? "#000" : "#00ff8844"} />
-            </button>
-          )}
-          {/* Mic — pink glow halo */}
-          <button onClick={() => { setConsoleOpen(false); handleMicTap(); }} style={{ width: 38, height: 38, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: "micGlow 2.5s ease infinite", boxShadow: "0 0 12px rgba(255,45,120,0.3)" }}>
-            <Icon d={Icons.mic} size={15} color="#fff" />
+      {/* ═══ BOTTOM BAR — chat+mic LEFT 46%, device occupies right 48% separately ═══ */}
+      <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, width: "46%", zIndex: 10, paddingBottom: "max(6px, env(safe-area-inset-bottom))", opacity: hudVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: hudVisible ? "auto" : "none" }}>
+        <div style={{ display: "flex", gap: 4, padding: "4px 6px", alignItems: "center" }}>
+          <input ref={chatInputRef} className="chat-input" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSend()} placeholder="Say something..." style={{ flex: 1, minWidth: 0, padding: "9px 12px", borderRadius: 10, background: "rgba(6,2,10,0.65)", backdropFilter: "blur(20px) saturate(1.4)", WebkitBackdropFilter: "blur(20px) saturate(1.4)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2, transition: "all 0.25s ease", boxShadow: "0 2px 12px rgba(0,0,0,0.4)" }} />
+          <button onTouchStart={handleMicDown} onTouchEnd={handleMicUp} onMouseDown={handleMicDown} onMouseUp={handleMicUp} onMouseLeave={() => { if (isRecording) stopRecording(); if (micHoldTimerRef.current && micHoldTimerRef.current !== "recording") { clearTimeout(micHoldTimerRef.current); micHoldTimerRef.current = null; } }} style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 8, border: "none", background: isRecording ? "#ff2d78" : "linear-gradient(135deg,#ff2d78,#ff6622)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s", animation: isRecording ? "recordPulse 1s ease infinite" : "micGlow 2.5s ease infinite", boxShadow: isRecording ? "0 0 20px rgba(255,45,120,0.5)" : "0 0 8px rgba(255,45,120,0.25)" }}>
+            <Icon d={Icons.record} size={12} color="#fff" />
           </button>
         </div>
+        {/* Recording indicator — slides up when holding mic */}
+        {isRecording && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", animation: "chatSlideIn 0.2s ease-out" }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff2d78", animation: "pulse 1s infinite", flexShrink: 0 }} />
+            <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 700, color: "#ff2d78", letterSpacing: -0.3 }}>
+              {Math.floor(recordingDuration / 60)}:{String(Math.floor(recordingDuration % 60)).padStart(2, "0")}
+            </span>
+            <span style={{ fontFamily: "'Inter'", fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: -0.2 }}>release to send</span>
+          </div>
+        )}
       </div>
 
-      {/* ═══ CONSOLE PANEL — Habbo-style tabbed info panel ═══ */}
-      {consoleOpen && (
+
+      {/* ═══ MINI DEVICE — Apple Watch 42mm glass terminal ═══ */}
+      {(() => {
+        const bc = selectedCoin || speakerInfo?.coin;
+        if (!bc) return null;
+        const lastPos = userPositions.filter(p => p.mint === bc.ca).slice(-1)[0];
+        const pnl = lastPos && lastPos.entry > 0 ? ((lastPos.current - lastPos.entry) / lastPos.entry * 100) : null;
+        const rawP = parseFloat(bc.price) || 0;
+        const priceFmt = fmtPrice(rawP);
+        const handleBuyTap = () => {
+          if (buyConfirming) { clearTimeout(buyConfirmTimer.current); setBuyConfirming(false); if (quickBuyUSD) handleQuickBuy(quickBuyUSD); }
+          else { setBuyConfirming(true); buyConfirmTimer.current = setTimeout(() => setBuyConfirming(false), 2000); }
+        };
+        const switchTF = (tf) => { chartTFRef.current = tf; setChartTimeframe(tf); const d = chartTFDataRef.current[tf]; if (d) setChartData(d); const pool = bc.poolAddress; if (pool) fetchTokenChart(pool, tf).then(r => { if (r) { chartTFDataRef.current[tf] = r; setChartData(r); } }); };
+        const lowBal = walletBalance * solPrice < (quickBuyUSD || 5);
+        const liveTokens = trendingTokens || COINS;
+        const DW_PX = 184;
+        const SCREEN_H = 140;
+        const topCalls = (stateRef.current.topCallsToday || []);
+        const sortedTokens = (() => {
+          const tokens = [...liveTokens];
+          const pv = (s) => { if (!s || s === "\u2014") return 0; const n = parseFloat(s.replace(/[$,]/g, "")); if (s.includes("B")) return n*1e9; if (s.includes("M")) return n*1e6; if (s.includes("K")) return n*1e3; return n; };
+          if (homeSortMode === "gainers") return tokens.sort((a, b) => parseFloat(b.change) - parseFloat(a.change));
+          if (homeSortMode === "volume") return tokens.sort((a, b) => pv(b.vol) - pv(a.vol));
+          if (homeSortMode === "mcap") return tokens.sort((a, b) => pv(b.mcap) - pv(a.mcap));
+          return tokens;
+        })();
+        return (
         <div data-ui="1" style={{
-          position: "absolute", bottom: 52, left: 0, right: 0, zIndex: 9,
-          height: "45vh", maxHeight: 420,
-          background: "rgba(8,4,12,0.97)",
-          backdropFilter: "blur(32px) saturate(1.6)", WebkitBackdropFilter: "blur(32px) saturate(1.6)",
-          border: "1px solid rgba(0,212,255,0.08)", borderBottom: "none",
-          borderRadius: "16px 16px 0 0",
-          animation: "consoleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
-          display: "flex", flexDirection: "column",
-          boxShadow: "0 -8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(0,212,255,0.06)",
+          position: "absolute", zIndex: 50,
+          bottom: 0, right: 4, width: "48%",
+          paddingBottom: "max(6px, env(safe-area-inset-bottom))",
+          visibility: consoleRevealed ? "visible" : "hidden",
+          animation: consoleRevealed ? "consoleHello 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards" : "none",
+          pointerEvents: consoleRevealed ? "auto" : "none",
+          transition: "width 0.3s ease, left 0.3s ease",
         }}>
-          {/* Handle bar */}
-          <div style={{ width: 36, height: 4, borderRadius: 2, background: "rgba(0,212,255,0.2)", margin: "8px auto 0", flexShrink: 0 }} />
+          <div style={{
+            borderRadius: 16, padding: 1.5,
+            background: "linear-gradient(165deg, rgba(80,60,120,0.4) 0%, rgba(20,10,35,0.8) 30%, rgba(12,6,20,0.95) 50%, rgba(20,10,35,0.8) 70%, rgba(60,40,100,0.3) 100%)",
+            boxShadow: "0 16px 48px rgba(0,0,0,0.85), 0 4px 16px rgba(0,0,0,0.6), 0 0 1px rgba(255,255,255,0.1), inset 0 1px 0 rgba(255,255,255,0.1)",
+            position: "relative", overflow: "hidden",
+          }}>
+            {/* Greeting shimmer — one-time glass shine on entrance */}
+            {consoleRevealed && <div style={{ position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none", borderRadius: 16, background: "linear-gradient(105deg, transparent 40%, rgba(0,212,255,0.12) 45%, rgba(255,255,255,0.06) 50%, rgba(0,212,255,0.12) 55%, transparent 60%)", backgroundSize: "200% 100%", animation: "consoleShimmer 1.4s ease-out 0.3s both" }} />}
+            <div style={{
+              borderRadius: 14.5, overflow: "hidden", position: "relative",
+              background: "rgba(8,4,18,0.18)",
+              backdropFilter: "blur(32px) saturate(1.6)", WebkitBackdropFilter: "blur(32px) saturate(1.6)",
+              boxShadow: "inset 0 0 24px rgba(0,212,255,0.02), inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2)",
+            }}>
+              <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2, opacity: 0.015, backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 3px)", mixBlendMode: "overlay" }} />
+              <div style={{ position: "absolute", top: 0, left: "10%", right: "10%", height: 1, background: "linear-gradient(90deg, transparent, rgba(0,212,255,0.35), transparent)", zIndex: 2 }} />
+              <div style={{ position: "absolute", bottom: 0, left: "20%", right: "20%", height: 1, background: "linear-gradient(90deg, transparent, rgba(255,45,120,0.15), transparent)", zIndex: 2 }} />
 
-          {/* Tab rail — Habbo-style */}
-          <div style={{ display: "flex", gap: 0, padding: "8px 12px 0", flexShrink: 0, borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-            {[
-              { id: "discover", icon: Icons.compass, label: "Discover" },
-              { id: "portfolio", icon: Icons.pieChart, label: "Portfolio" },
-              { id: "room", icon: Icons.users, label: "Room" },
-              { id: "activity", icon: Icons.activity, label: "Activity" },
-            ].map(tab => (
-              <button key={tab.id} onClick={() => setConsoleTab(tab.id)} style={{
-                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-                padding: "6px 4px 8px", background: "none", border: "none", cursor: "pointer",
-                borderBottom: consoleTab === tab.id ? "2px solid #00d4ff" : "2px solid transparent",
-                transition: "all 0.2s",
-              }}>
-                <Icon d={tab.icon} size={14} color={consoleTab === tab.id ? "#00d4ff" : "#555"} style={consoleTab === tab.id ? { filter: "drop-shadow(0 0 4px rgba(0,212,255,0.5))" } : {}} />
-                <span style={{ fontFamily: "'Inter'", fontSize: 10, fontWeight: consoleTab === tab.id ? 700 : 500, color: consoleTab === tab.id ? "#fff" : "#555", letterSpacing: -0.2 }}>{tab.label}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Tab content */}
-          <div style={{ flex: 1, overflow: "auto", padding: "10px 12px", scrollbarWidth: "none", msOverflowStyle: "none", animation: "tabSlide 0.2s ease" }} key={consoleTab}>
-
-            {/* ═══ DISCOVER TAB ═══ */}
-            {consoleTab === "discover" && (() => {
-              const filtered = COINS.filter(c =>
-                !consoleSearchQuery || c.ticker.toLowerCase().includes(consoleSearchQuery.toLowerCase()) || c.ca.toLowerCase().includes(consoleSearchQuery.toLowerCase())
-              );
-              return (
-                <>
-                  {/* Search bar */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(0,212,255,0.08)", marginBottom: 12 }}>
-                    <Icon d={Icons.search} size={14} color="rgba(0,212,255,0.4)" />
-                    <input value={consoleSearchQuery} onChange={e => setConsoleSearchQuery(e.target.value)} placeholder="Search tokens..." style={{ flex: 1, background: "none", border: "none", color: "#fff", fontFamily: "'Inter'", fontSize: 12, fontWeight: 400, outline: "none", letterSpacing: -0.2 }} />
-                    {consoleSearchQuery && <button onClick={() => setConsoleSearchQuery("")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Icon d={Icons.x} size={12} color="#555" /></button>}
-                  </div>
-
-                  {/* Trending section */}
-                  {!consoleSearchQuery && (
-                    <>
-                      <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>TRENDING NOW</div>
-                      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 10, marginBottom: 8, scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                        {COINS.filter(c => c.positive).map((coin, i) => (
-                          <div key={i} onClick={() => { if (speakerInfo) { setConsoleOpen(false); setShowBuySheet(true); } }} style={{
-                            minWidth: 140, padding: "10px 12px", borderRadius: 12, cursor: "pointer",
-                            background: "rgba(255,255,255,0.03)",
-                            border: "1px solid rgba(0,212,255,0.06)",
-                            backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
-                            transition: "all 0.2s",
-                          }}>
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                              <span style={{ fontFamily: "'Inter'", fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{coin.ticker}</span>
-                              <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{coin.change}</span>
-                            </div>
-                            <MiniChart data={generateChart(coin.positive, 24)} positive={coin.positive} width={120} height={32} />
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-
-                  {/* All tokens list */}
-                  <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>ALL TOKENS</div>
-                  {filtered.map((coin, i) => (
-                    <div key={i} onClick={() => { if (speakerInfo) { setConsoleOpen(false); setShowBuySheet(true); } }} style={{
-                      display: "flex", alignItems: "center", gap: 8, padding: "8px 6px", height: 44,
-                      borderBottom: "1px solid rgba(255,255,255,0.03)", cursor: "pointer",
-                      transition: "background 0.15s",
-                    }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg,${coin.positive ? "#00ff88" : "#ff4444"},${coin.positive ? "#00cc66" : "#cc2222"})`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 900, fontSize: 11, color: coin.positive ? "#000" : "#fff", flexShrink: 0 }}>{coin.ticker[1]}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontFamily: "'Inter'", fontSize: 12, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{coin.ticker}</div>
-                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{coin.mcap}</div>
-                      </div>
-                      <div style={{ textAlign: "right", marginRight: 4 }}>
-                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>${coin.price}</div>
-                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 600, color: coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{coin.change}</div>
-                      </div>
-                      <MiniChart data={generateChart(coin.positive, 20)} positive={coin.positive} width={60} height={20} />
+              {/* Header — always visible, shows sparkline even when collapsed */}
+              <div onClick={() => setMiniOpen(p => !p)} style={{ padding: "4px 8px 2px", cursor: "pointer", position: "relative", zIndex: 1 }}>
+                <div style={{ position: "absolute", top: 4, right: 8, display: "flex", alignItems: "center", gap: 4 }}>
+                  <button onClick={(e) => { e.stopPropagation(); setShowCallInput(true); setMiniOpen(true); setMiniTab("trade"); }} style={{
+                    padding: "2px 6px", borderRadius: 8, border: "none", cursor: "pointer",
+                    background: "linear-gradient(135deg,#00d4ff,#0099cc)",
+                    fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 800, color: "#fff",
+                    letterSpacing: -0.3, display: "flex", alignItems: "center", gap: 2,
+                    boxShadow: "0 0 8px rgba(0,212,255,0.3), 0 2px 4px rgba(0,0,0,0.3)",
+                    transition: "all 0.15s",
+                  }}><Icon d={Icons.mic} size={7} color="#fff" />+CA</button>
+                  <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#00ff88", boxShadow: "0 0 6px #00ff88, 0 0 2px #00ff88", animation: "pulse 2s infinite" }} />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  {bc.imageUrl && <img src={bc.imageUrl} style={{ width: 18, height: 18, borderRadius: 5, objectFit: "cover", flexShrink: 0, boxShadow: "0 0 8px rgba(0,212,255,0.15), 0 2px 4px rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.06)" }} />}
+                  <span style={{ fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, color: "#fff", letterSpacing: -0.5 }}>{bc.ticker}</span>
+                  <span onClick={(e) => { e.stopPropagation(); copyCA(e, bc); }} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontFamily: "'JetBrains Mono'", fontSize: 7, color: caCopied ? "#00ff88" : "rgba(255,255,255,0.15)", cursor: "pointer", transition: "color 0.2s, background 0.2s", padding: "1px 3px", borderRadius: 3, background: caCopied ? "rgba(0,255,136,0.06)" : "transparent" }}>{bc.ca.slice(0, 4)}..{bc.ca.slice(-3)}<Icon d={caCopied ? Icons.check : Icons.copy} size={7} color={caCopied ? "#00ff88" : "rgba(255,255,255,0.2)"} /></span>
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 0 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 800, fontSize: 17, color: "#fff", letterSpacing: -0.8, textShadow: "0 0 20px rgba(255,255,255,0.06)" }}>{priceFmt}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 700, fontSize: 10, color: bc.positive ? "#00ff88" : "#ff4444", padding: "1px 4px", borderRadius: 3, background: bc.positive ? "rgba(0,255,136,0.06)" : "rgba(255,68,68,0.06)" }}>{bc.change}</span>
+                </div>
+                {/* Stats row — MC / LIQ / VOL — stretch full width */}
+                <div style={{ display: "flex", marginTop: 1, justifyContent: "space-between" }}>
+                  {[{ l: "MC", v: bc.mcap, c: "#fff" }, { l: "LIQ", v: bc.liq, c: "#00d4ff" }, { l: "VOL", v: bc.vol, c: "#b24dff" }].map(s => (
+                    <div key={s.l} style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontFamily: "'Inter'", fontSize: 7, fontWeight: 600, color: "#444", flexShrink: 0 }}>{s.l}</span>
+                      <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 700, color: s.c, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.v || "—"}</span>
                     </div>
                   ))}
-                  {filtered.length === 0 && <div style={{ fontFamily: "'Inter'", fontSize: 12, color: "#555", textAlign: "center", padding: 20 }}>No tokens found</div>}
-                </>
-              );
-            })()}
-
-            {/* ═══ PORTFOLIO TAB ═══ */}
-            {consoleTab === "portfolio" && (() => {
-              const totalValue = userPositions.reduce((sum, p) => sum + p.amount * solPrice * (p.current / p.entry), 0);
-              const totalCost = userPositions.reduce((sum, p) => sum + p.amount * solPrice, 0);
-              const totalPnl = totalCost > 0 ? ((totalValue - totalCost) / totalCost * 100) : 0;
-              return (
-                <>
-                  {/* Portfolio header */}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "8px 4px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", marginBottom: 12 }}>
-                    <div>
-                      <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 6, letterSpacing: 0.5 }}>TOTAL VALUE</div>
-                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 22, fontWeight: 700, color: "#fff", letterSpacing: -1 }}>${totalValue.toFixed(2)}</div>
-                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 600, color: totalPnl >= 0 ? "#00ff88" : "#ff4444", letterSpacing: -0.3, marginTop: 2 }}>
-                        {totalPnl >= 0 ? "+" : ""}{(totalValue - totalCost).toFixed(2)} ({totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(1)}%)
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 6, letterSpacing: 0.5 }}>YOUR POSITIONS</div>
-                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 16, fontWeight: 700, color: "#fff" }}>{userPositions.length} tokens</div>
-                    </div>
-                  </div>
-
-                  {/* Position cards */}
-                  {userPositions.length > 0 ? userPositions.map((pos, i) => {
-                    const pnl = ((pos.current - pos.entry) / pos.entry * 100);
-                    return (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 6px", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontFamily: "'Inter'", fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{pos.coin}</div>
-                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{pos.amount.toFixed(2)} SOL</div>
-                        </div>
-                        <div style={{ textAlign: "right", marginRight: 8 }}>
-                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 700, color: pnl >= 0 ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(1)}%</div>
-                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>${(pos.amount * solPrice * (pos.current / pos.entry)).toFixed(0)}</div>
-                        </div>
-                        <button onClick={() => handleSell(pos.coin)} style={{ height: 30, padding: "0 10px", borderRadius: 8, border: "1px solid rgba(255,68,68,0.2)", background: "rgba(255,68,68,0.06)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 10, cursor: "pointer", letterSpacing: -0.2 }}>Sell</button>
-                      </div>
-                    );
-                  }) : (
-                    <div style={{ textAlign: "center", padding: "30px 20px" }}>
-                      <div style={{ fontFamily: "'Inter'", fontSize: 13, fontWeight: 600, color: "#555", marginBottom: 4 }}>No positions yet</div>
-                      <div style={{ fontFamily: "'Inter'", fontSize: 11, color: "#444" }}>Buy a token to see your portfolio here</div>
+                </div>
+                {/* Full-width chart — always visible, even collapsed */}
+                <div style={{ margin: "2px -10px 0", padding: "0 2px", position: "relative", height: 32 }}>
+                  {chartData && chartData.length > 2 ? (
+                    <MiniChart data={chartData} positive={bc.positive} width={180} height={32} />
+                  ) : (
+                    <div style={{ width: "100%", height: 32, borderRadius: 4, background: "rgba(0,212,255,0.04)", position: "relative", overflow: "hidden" }}>
+                      <div style={{
+                        position: "absolute", inset: 0,
+                        background: "linear-gradient(90deg, transparent 0%, rgba(0,212,255,0.06) 30%, rgba(0,212,255,0.12) 50%, rgba(0,212,255,0.06) 70%, transparent 100%)",
+                        animation: "chartShimmer 1.5s ease-in-out infinite",
+                      }} />
+                      {[0.33, 0.66].map(p => (
+                        <div key={p} style={{ position: "absolute", left: 0, right: 0, top: `${p * 100}%`, height: 1, background: "rgba(255,255,255,0.03)" }} />
+                      ))}
                     </div>
                   )}
-
-                  {/* Session stats */}
-                  <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginTop: 16, marginBottom: 8, letterSpacing: 0.5 }}>SESSION STATS</div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {[
-                      { label: "Volume", value: `$${(callVolume / 1000).toFixed(1)}K` },
-                      { label: "Trades", value: `${userPositions.length + activityFeed.filter(a => a.user === "you").length}` },
-                      { label: "Fee Rev", value: `$${platformRevenue.toFixed(0)}` },
-                    ].map((s, i) => (
-                      <div key={i} style={{ flex: 1, padding: "10px 8px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.06)", textAlign: "center" }}>
-                        <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 600, color: "#555", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>{s.label}</div>
-                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{s.value}</div>
-                      </div>
+                  <div style={{ position: "absolute", bottom: 2, right: 4, display: "flex", gap: 2 }}>
+                    {["1h", "1d"].map(tf => (
+                      <button key={tf} onClick={(e) => { e.stopPropagation(); switchTF(tf); }} style={{
+                        padding: "1px 4px", borderRadius: 3, cursor: "pointer", border: "none",
+                        fontFamily: "'JetBrains Mono'", fontSize: 6, fontWeight: 700,
+                        background: chartTimeframe === tf ? "rgba(0,212,255,0.25)" : "rgba(0,0,0,0.5)",
+                        color: chartTimeframe === tf ? "#00d4ff" : "rgba(255,255,255,0.3)",
+                      }}>{tf.toUpperCase()}</button>
                     ))}
                   </div>
-                </>
-              );
-            })()}
+                </div>
+                {lastPos && pnl !== null && <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: pnl >= 0 ? "rgba(0,255,136,0.6)" : "rgba(255,68,68,0.6)", letterSpacing: -0.2, marginTop: 1 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(1)}% position</div>}
+              </div>
 
-            {/* ═══ ROOM TAB ═══ */}
-            {consoleTab === "room" && (
-              <>
-                {/* On stage now */}
-                {speakerInfo ? (
-                  <>
-                    <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>ON STAGE NOW</div>
-                    <div style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(0,212,255,0.06)", marginBottom: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: `linear-gradient(135deg,#ff2d78,#ff6622)`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 900, fontSize: 14, color: "#fff" }}>{speakerInfo.name[0].toUpperCase()}</div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontFamily: "'Inter'", fontSize: 14, fontWeight: 800, color: "#fff", letterSpacing: -0.3 }}>{speakerInfo.name}</div>
-                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3 }}>{speakerInfo.followers} followers</div>
+              {/* LIVE pill — "Navi" notification when stage coin differs from console coin */}
+              {selectedCoin && speakerInfo?.coin && speakerInfo.coin.ca !== selectedCoin.ca && (
+                <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "2px 6px", padding: "3px 6px", borderRadius: 8, background: "rgba(255,45,120,0.08)", border: "1px solid rgba(255,45,120,0.2)", animation: "chatSlideIn 0.3s ease-out", cursor: "pointer" }}
+                  onClick={(e) => { e.stopPropagation(); setSelectedCoin(null); setChartData(null); const tfd = generateAllTimeframes(speakerInfo.coin.positive); chartTFDataRef.current = tfd; setChartData(tfd[chartTFRef.current]); loadRealChart(speakerInfo.coin); }}>
+                  <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#ff2d78", animation: "liveDot 2s infinite", boxShadow: "0 0 4px rgba(255,45,120,0.6)", flexShrink: 0 }} />
+                  <span style={{ fontFamily: "'Inter'", fontSize: 7, fontWeight: 700, color: "#ff2d78" }}>LIVE</span>
+                  {speakerInfo.coin.imageUrl && <img src={speakerInfo.coin.imageUrl} style={{ width: 12, height: 12, borderRadius: 3, objectFit: "cover" }} />}
+                  <span style={{ fontFamily: "'Inter'", fontSize: 8, fontWeight: 700, color: "#fff", letterSpacing: -0.3 }}>{speakerInfo.coin.ticker}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.3)" }}>{speakerInfo.coin.mcap}</span>
+                  <button onClick={(e) => { e.stopPropagation(); setSelectedCoin(null); if (quickBuyUSD) handleQuickBuy(quickBuyUSD); }} style={{ marginLeft: "auto", background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.25)", borderRadius: 5, padding: "1px 5px", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
+                    <Icon d={Icons.zap} size={7} color="#00ff88" />
+                    <span style={{ fontFamily: "'Inter'", fontSize: 7, fontWeight: 700, color: "#00ff88" }}>Ape</span>
+                  </button>
+                </div>
+              )}
+
+              {/* ── Quick buy strip — always visible under chart ── */}
+              <div style={{ display: "flex", gap: 3, padding: "3px 8px", borderTop: "1px solid rgba(255,255,255,0.03)", background: "linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.15) 100%)" }}>
+                {walletBalance === 0 ? (
+                  <button onClick={() => { setMiniOpen(true); setMiniTab("fund"); }} style={{
+                    flex: 1, padding: "5px 0", borderRadius: 6, cursor: "pointer", border: "none",
+                    fontFamily: "'Inter'", fontSize: 9, fontWeight: 800, letterSpacing: -0.3,
+                    background: "linear-gradient(135deg,#00d4ff,#0099cc)",
+                    color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                    boxShadow: "0 0 12px rgba(0,212,255,0.3), inset 0 1px 0 rgba(255,255,255,0.2)",
+                  }}>
+                    <Icon d={Icons.wallet} size={9} color="#fff" />
+                    <span>Fund Wallet to Start Trading</span>
+                    <svg width="6" height="9" viewBox="0 0 6 9" style={{ animation: "gentleBounce 2s ease-in-out infinite" }}><path d="M1 1l3.5 3.5L1 8" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
+                ) : (<>
+                  <button onClick={() => { setMiniOpen(true); setMiniTab("fund"); }} style={{
+                    padding: "4px 5px", borderRadius: 6, cursor: "pointer", border: "none",
+                    background: "transparent", display: "flex", alignItems: "center", gap: 2,
+                    transition: "all 0.15s",
+                  }}>
+                    <Icon d={Icons.wallet} size={7} color={lowBal ? "#ffaa00" : "rgba(255,255,255,0.25)"} />
+                    {lowBal && <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#ffaa00", boxShadow: "0 0 4px #ffaa00", animation: "pulse 2s infinite" }} />}
+                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 600, color: lowBal ? "#ffaa00" : "rgba(255,255,255,0.25)", letterSpacing: -0.3 }}>{walletBalance.toFixed(walletBalance < 1 ? 3 : 2)}</span>
+                  </button>
+                  {[5, 10, 25].map(usd => (
+                    <button key={usd} onClick={() => { setQuickBuyUSD(usd); setBuyConfirming(false); clearTimeout(buyConfirmTimer.current); }} style={{
+                      flex: 1, padding: "4px 0", borderRadius: 6, cursor: "pointer",
+                      fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 700, letterSpacing: -0.5,
+                      border: quickBuyUSD === usd ? "1px solid rgba(0,255,136,0.35)" : "1px solid rgba(255,255,255,0.03)",
+                      background: quickBuyUSD === usd ? "rgba(0,255,136,0.1)" : "rgba(255,255,255,0.015)",
+                      color: quickBuyUSD === usd ? "#00ff88" : "rgba(255,255,255,0.2)",
+                      boxShadow: quickBuyUSD === usd ? "0 0 8px rgba(0,255,136,0.12), inset 0 1px 0 rgba(0,255,136,0.1)" : "none",
+                      transition: "all 0.15s",
+                    }}>${usd}</button>
+                  ))}
+                  {lowBal ? (
+                    <button onClick={() => { setMiniOpen(true); setMiniTab("fund"); }} style={{
+                      flex: 1.4, padding: "4px 0", borderRadius: 6, cursor: "pointer", border: "none",
+                      fontFamily: "'Inter'", fontSize: 9, fontWeight: 800, letterSpacing: -0.3,
+                      background: "rgba(0,212,255,0.08)", color: "#00d4ff",
+                      transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 2,
+                    }}>
+                      <Icon d={Icons.wallet} size={8} color="#00d4ff" />Fund
+                    </button>
+                  ) : (
+                    <button onClick={handleBuyTap} style={{
+                      flex: 1.4, padding: "4px 0", borderRadius: 6, cursor: "pointer", border: "none",
+                      fontFamily: "'Inter'", fontSize: 9, fontWeight: 800, letterSpacing: -0.3,
+                      background: buyConfirming ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(0,255,136,0.06)",
+                      color: buyConfirming ? "#000" : "#00ff88",
+                      boxShadow: buyConfirming ? "0 0 16px rgba(0,255,136,0.4), inset 0 1px 0 rgba(255,255,255,0.2)" : "none",
+                      transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 2,
+                      animation: buyConfirming ? "buyGlow 1s infinite" : "none",
+                    }}>
+                      {buyConfirming ? <><Icon d={Icons.zap} size={8} color="#000" />GO</> : <><Icon d={Icons.zap} size={8} color="#00ff88" />Buy</>}
+                    </button>
+                  )}
+                </>)}
+              </div>
+
+              {/* Expandable screen */}
+              <div style={{ maxHeight: miniOpen ? SCREEN_H + 28 : 0, overflow: "hidden", transition: "max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1)" }}>
+                <div style={{ height: 1, margin: "0 6px", background: "linear-gradient(90deg, transparent, rgba(0,212,255,0.08), transparent)" }} />
+                <div style={{ height: SCREEN_H, overflow: "auto", padding: "4px 6px", scrollbarWidth: "none", msOverflowStyle: "none", position: "relative", zIndex: 1 }}>
+
+                  {/* ── Inline Call Input ── */}
+                  {showCallInput && (
+                    <div style={{ padding: "4px 0 6px", animation: "chatSlideIn 0.2s ease-out" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 700, color: "rgba(255,45,120,0.7)", letterSpacing: 0.8 }}>CALL A COIN</span>
+                        <button onClick={() => { setShowCallInput(false); setStepUpCA(""); setStepUpCoinPreview(null); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 0 }}><Icon d={Icons.x} size={9} color="#555" /></button>
+                      </div>
+                      <input value={stepUpCA} onChange={e => setStepUpCA(e.target.value)} placeholder="Paste CA or ticker..." style={{ width: "100%", padding: "6px 8px", borderRadius: 7, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 500, outline: "none", boxSizing: "border-box", letterSpacing: -0.3 }} />
+                      {stepUpCA.length > 2 && (
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: stepUpCoinPreview ? "#00ff88" : "#ff9f5a", padding: "3px 0", display: "flex", alignItems: "center", gap: 3 }}>
+                          {stepUpLookupLoading ? (
+                            <>
+                              <div style={{ width: 8, height: 8, border: "1.5px solid rgba(0,212,255,0.25)", borderTopColor: "#00d4ff", borderRadius: "50%", animation: "spin 0.6s linear infinite" }} />
+                              <span>Looking up...</span>
+                            </>
+                          ) : stepUpCoinPreview ? (
+                            <>
+                              <Icon d={Icons.check} size={8} color="#00ff88" />
+                              <span>{stepUpCoinPreview.ticker} · {stepUpCoinPreview.mcap} · {stepUpCoinPreview.change}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Icon d={Icons.x} size={8} color="#ff9f5a" />
+                              <span>No match yet</span>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      <button onClick={() => handleCallCoin()} disabled={!stepUpCA.trim() || !stepUpCoinPreview || stepUpLookupLoading} style={{
+                        width: "100%", padding: "5px 0", borderRadius: 7, border: "none", marginTop: 3, cursor: stepUpCA.trim() && stepUpCoinPreview && !stepUpLookupLoading ? "pointer" : "default",
+                        background: stepUpCA.trim() && stepUpCoinPreview && !stepUpLookupLoading ? "linear-gradient(135deg,#ff2d78,#ff6622)" : "rgba(255,255,255,0.04)",
+                        color: stepUpCA.trim() && stepUpCoinPreview && !stepUpLookupLoading ? "#fff" : "#444",
+                        fontFamily: "'Inter'", fontSize: 9, fontWeight: 800, letterSpacing: -0.3,
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                        boxShadow: stepUpCA.trim() && stepUpCoinPreview && !stepUpLookupLoading ? "0 0 12px rgba(255,45,120,0.3)" : "none",
+                        transition: "all 0.15s",
+                      }}>
+                        <Icon d={speakerInfo ? Icons.users : Icons.mic} size={9} color={stepUpCA.trim() && stepUpCoinPreview && !stepUpLookupLoading ? "#fff" : "#444"} />
+                        {speakerInfo ? "Join Queue" : "Call This"}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* HOME — fomo-style feed */}
+                  {miniTab === "home" && (<>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 6px", borderRadius: 7, background: "rgba(0,212,255,0.02)", border: "1px solid rgba(0,212,255,0.06)", marginBottom: 4 }}>
+                      <Icon d={Icons.search} size={9} color="rgba(0,212,255,0.3)" />
+                      <input value={miniSearch} onChange={e => { setMiniSearch(e.target.value); setConsoleSearchQuery(e.target.value); }} placeholder="Search" style={{ flex: 1, background: "none", border: "none", color: "#fff", fontFamily: "'Inter'", fontSize: 9, outline: "none", padding: 0 }} />
+                      {miniSearch && <button onClick={() => { setMiniSearch(""); setConsoleSearchQuery(""); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Icon d={Icons.x} size={8} color="#555" /></button>}
+                    </div>
+                    {speakerInfo && (
+                      <div onClick={() => { setSelectedCoin(speakerInfo.coin); setMiniTab("trade"); }} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 6px", borderRadius: 7, background: "rgba(255,45,120,0.06)", border: "1px solid rgba(255,45,120,0.12)", marginBottom: 4, cursor: "pointer" }}>
+                        <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#ff2d78", boxShadow: "0 0 6px #ff2d78", animation: "pulse 1.5s infinite", flexShrink: 0 }} />
+                        <span style={{ fontFamily: "'Inter'", fontSize: 7, fontWeight: 800, color: "#ff2d78", letterSpacing: 0.5, flexShrink: 0 }}>LIVE</span>
+                        {speakerInfo.coin?.imageUrl && <img src={speakerInfo.coin.imageUrl} style={{ width: 14, height: 14, borderRadius: 4, objectFit: "cover", flexShrink: 0 }} />}
+                        <span style={{ fontFamily: "'Inter'", fontSize: 8, fontWeight: 700, color: "#fff", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{speakerInfo.name} · {speakerInfo.coin.ticker}</span>
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "rgba(255,255,255,0.3)" }}>{Math.ceil(speakerTimeLeft)}s</span>
+                      </div>
+                    )}
+                    {topCalls.length > 0 && !miniSearch && (<>
+                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,45,120,0.6)", letterSpacing: 0.5, marginBottom: 3, fontWeight: 700 }}>TOP CALLS</div>
+                      {topCalls.slice(0, 3).map((call, i) => {
+                        const callToken = liveTokens.find(c => c.ticker === call.ticker);
+                        return (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 3, padding: "3px 2px", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: ["#FFD700","#C0C0C0","#CD7F32"][i] || "#666", width: 10, flexShrink: 0 }}>{i+1}</span>
+                          {callToken?.imageUrl ? (
+                            <img src={callToken.imageUrl} style={{ width: 14, height: 14, borderRadius: 4, objectFit: "cover", flexShrink: 0 }} />
+                          ) : (
+                            <div style={{ width: 14, height: 14, borderRadius: 4, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 800, fontSize: 6, color: "rgba(255,255,255,0.2)", flexShrink: 0 }}>{call.ticker?.[1] || "?"}</div>
+                          )}
+                          <span style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 700, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{call.ticker}</span>
+                          <span style={{ fontFamily: "'Inter'", fontSize: 7, color: "#ff2d78", flexShrink: 0 }}>{call.caller}</span>
+                          <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 700, color: call.change?.startsWith("+") ? "#00ff88" : "#ff4444", flexShrink: 0 }}>{call.change}</span>
+                        </div>
+                        );
+                      })}
+                      <div style={{ height: 1, margin: "4px 0", background: "rgba(255,255,255,0.03)" }} />
+                    </>)}
+                    {!miniSearch && (
+                      <div style={{ display: "flex", gap: 0, marginBottom: 3 }}>
+                        {[{ id: "trending", label: "Trending" }, { id: "gainers", label: "Gainers" }, { id: "volume", label: "Volume" }, { id: "mcap", label: "MC" }].map(s => (
+                          <button key={s.id} onClick={() => setHomeSortMode(s.id)} style={{
+                            flex: 1, padding: "3px 0", border: "none", cursor: "pointer",
+                            fontFamily: "'Inter'", fontSize: 8, fontWeight: homeSortMode === s.id ? 700 : 500, letterSpacing: -0.2,
+                            background: "none", color: homeSortMode === s.id ? "#fff" : "#555",
+                            borderBottom: homeSortMode === s.id ? "1.5px solid #00d4ff" : "1.5px solid transparent",
+                            transition: "all 0.15s",
+                          }}>{s.label}</button>
+                        ))}
+                      </div>
+                    )}
+                    {(miniSearch.length >= 2 ? (searchResults || []) : sortedTokens).slice(0, 12).map((coin, i) => (
+                      <div key={coin.ca || i} onClick={() => { setSelectedCoin(coin); setMiniTab("trade"); setMiniSearch(""); setConsoleSearchQuery(""); }} style={{
+                        display: "flex", alignItems: "center", gap: 4, padding: "3px 1px", cursor: "pointer",
+                        borderBottom: "1px solid rgba(255,255,255,0.02)",
+                      }}>
+                        {coin.imageUrl ? (
+                          <img src={coin.imageUrl} style={{ width: 20, height: 20, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+                        ) : (
+                          <div style={{ width: 20, height: 20, borderRadius: 6, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 800, fontSize: 8, color: "rgba(255,255,255,0.3)", flexShrink: 0 }}>{coin.ticker?.[1] || "?"}</div>
+                        )}
+                        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                          <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 700, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{coin.ticker}</div>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "#555" }}>{coin.mcap}</div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 700, color: "#fff" }}>{fmtPrice(coin.price)}</div>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: coin.positive ? "#00ff88" : "#ff4444" }}>{coin.change}</div>
                         </div>
                       </div>
-                      <div style={{ fontFamily: "'Inter'", fontSize: 11, color: "#888", marginBottom: 6, letterSpacing: -0.2 }}>
-                        Calling {speakerInfo.coin.ticker} · <span style={{ fontFamily: "'JetBrains Mono'", color: "#00d4ff" }}>{Math.floor(speakerTimeLeft)}s</span> remaining
+                    ))}
+                    {miniSearch.length >= 2 && searchLoading && <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "rgba(255,255,255,0.15)", textAlign: "center", padding: 8 }}>searching...</div>}
+                    {!miniSearch && !trendingTokens && <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "#444", textAlign: "center", padding: 8 }}>loading...</div>}
+                  </>)}
+
+                  {/* TRADE */}
+                  {miniTab === "trade" && (<>
+                    {/* Multi-timeframe % change pills */}
+                    <div style={{ display: "flex", gap: 3, marginBottom: 5 }}>
+                      {[{ label: "5M", val: bc.priceChanges?.m5 }, { label: "1H", val: bc.priceChanges?.h1 }, { label: "6H", val: bc.priceChanges?.h6 }, { label: "24H", val: bc.priceChanges?.h24 }].map(tf => {
+                        const v = parseFloat(tf.val) || 0;
+                        const pos = v >= 0;
+                        return (
+                          <div key={tf.label} style={{ flex: 1, padding: "3px 0", borderRadius: 5, background: pos ? "rgba(0,255,136,0.04)" : "rgba(255,68,68,0.04)", border: `1px solid ${pos ? "rgba(0,255,136,0.1)" : "rgba(255,68,68,0.1)"}`, textAlign: "center" }}>
+                            <div style={{ fontFamily: "'Inter'", fontSize: 6, fontWeight: 600, color: "rgba(255,255,255,0.25)", letterSpacing: 0.5, marginBottom: 1 }}>{tf.label}</div>
+                            <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: pos ? "#00ff88" : "#ff4444" }}>{pos ? "+" : ""}{v.toFixed(1)}%</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Bloomberg-style detail rows */}
+                    <div style={{ margin: "0 0 4px" }}>
+                      {[
+                        { l: "Market cap", v: bc.mcap, c: "#fff" },
+                        { l: "Fully diluted", v: bc.fdv || bc.mcap, c: "#fff" },
+                        { l: "Liquidity", v: bc.liq, c: "#00d4ff" },
+                        { l: "24h volume", v: bc.vol, c: "#b24dff" },
+                        { l: "DEX", v: bc.dex && bc.dex !== "—" ? bc.dex.toUpperCase() : "—", c: "#ff2d78" },
+                      ].map(s => (
+                        <div key={s.l} style={{ display: "flex", alignItems: "baseline", padding: "1.5px 0" }}>
+                          <span style={{ fontFamily: "'Inter'", fontSize: 7.5, color: "rgba(255,255,255,0.3)", whiteSpace: "nowrap" }}>{s.l}</span>
+                          <span style={{ flex: 1, borderBottom: "1px dotted rgba(255,255,255,0.04)", margin: "0 4px", minWidth: 8, alignSelf: "center" }} />
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, fontWeight: 700, color: s.c, whiteSpace: "nowrap" }}>{s.v || "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Top Holders */}
+                    {tokenHolders && (() => {
+                      const holders = tokenHolders?.data?.top_holders || tokenHolders?.top_holders || [];
+                      if (!holders.length) return null;
+                      return (
+                        <div style={{ margin: "4px 0 2px" }}>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(0,212,255,0.5)", letterSpacing: 0.8, fontWeight: 700, marginBottom: 3 }}>TOP HOLDERS</div>
+                          {holders.slice(0, 5).map((h, i) => {
+                            const addr = h.owner_address || h.address || "";
+                            const pct = parseFloat(h.percentage_of_top_10 || h.percentage || h.balance_percentage || 0);
+                            return (
+                              <div key={i} style={{ display: "flex", alignItems: "center", gap: 3, padding: "1.5px 0" }}>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.15)", width: 8, flexShrink: 0 }}>{i + 1}</span>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7.5, color: "rgba(255,255,255,0.5)", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{addr.slice(0, 4)}...{addr.slice(-4)}</span>
+                                <div style={{ width: 40, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.04)", overflow: "hidden", flexShrink: 0 }}>
+                                  <div style={{ width: `${Math.min(pct, 100)}%`, height: "100%", borderRadius: 1.5, background: "linear-gradient(90deg, #00d4ff, #00d4ff88)" }} />
+                                </div>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 700, color: "#00d4ff", width: 28, textAlign: "right", flexShrink: 0 }}>{pct.toFixed(1)}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                    {/* Top Traders */}
+                    {tokenTraders && (() => {
+                      const traders = tokenTraders?.data?.top_traders || tokenTraders?.top_traders || [];
+                      if (!traders.length) return null;
+                      return (
+                        <div style={{ margin: "4px 0 2px" }}>
+                          <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(178,77,255,0.5)", letterSpacing: 0.8, fontWeight: 700, marginBottom: 3 }}>TOP TRADERS</div>
+                          {traders.slice(0, 5).map((t, i) => {
+                            const addr = t.owner_address || t.address || "";
+                            const bought = parseFloat(t.bought_usd || t.total_buy_usd || 0);
+                            const sold = parseFloat(t.sold_usd || t.total_sell_usd || 0);
+                            const pnl = sold > 0 && bought > 0 ? ((sold - bought) / bought * 100) : 0;
+                            return (
+                              <div key={i} style={{ display: "flex", alignItems: "center", gap: 3, padding: "1.5px 0" }}>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.15)", width: 8, flexShrink: 0 }}>{i + 1}</span>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7.5, color: "rgba(255,255,255,0.5)", overflow: "hidden", textOverflow: "ellipsis" }}>{addr.slice(0, 4)}...{addr.slice(-4)}</span>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(0,212,255,0.4)", flexShrink: 0 }}>B:{bought >= 1000 ? `$${(bought/1000).toFixed(0)}K` : `$${bought.toFixed(0)}`}</span>
+                                <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,45,120,0.4)", flexShrink: 0 }}>S:{sold >= 1000 ? `$${(sold/1000).toFixed(0)}K` : `$${sold.toFixed(0)}`}</span>
+                                <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 700, color: pnl >= 0 ? "#00ff88" : "#ff4444", flexShrink: 0 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(0)}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                    {/* Caller + votes + timer */}
+                    {speakerInfo && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 5px", borderRadius: 6, background: "rgba(255,45,120,0.04)", border: "1px solid rgba(255,45,120,0.08)", marginTop: 4 }}>
+                        <span style={{ fontFamily: "'Inter'", fontSize: 8, fontWeight: 700, color: "#ff2d78" }}>{speakerInfo.name}</span>
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.15)" }}>called @ {bc.mcap || "?"}</span>
+                        <span style={{ marginLeft: "auto", display: "flex", gap: 3 }}>
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "#00ff88" }}>{votes.up}</span>
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "#ff4444" }}>{votes.down}</span>
+                        </span>
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.2)" }}>{Math.ceil(speakerTimeLeft)}s</span>
                       </div>
-                      <div style={{ display: "flex", gap: 12, fontFamily: "'JetBrains Mono'", fontSize: 11, letterSpacing: -0.3 }}>
-                        <span style={{ color: "#00ff88" }}>🚀 {votes.up}</span>
-                        <span style={{ color: "#ff4444" }}>💀 {votes.down}</span>
-                        <span style={{ color: vr >= 50 ? "#00ff88" : "#ff4444" }}>({vr.toFixed(0)}% bullish)</span>
+                    )}
+                  </>)}
+
+                  {/* BAG */}
+                  {miniTab === "bag" && (<>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, padding: "2px 0" }}>
+                      <div>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: 0.5, marginBottom: 1 }}>VALUE</div>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 15, fontWeight: 800, color: "#fff", letterSpacing: -0.5 }}>${userPositions.reduce((s, p) => s + (p.notionalUsd || 0) * (p.entry > 0 ? (p.current / p.entry) : 1), 0).toFixed(2)}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: 0.5, marginBottom: 1 }}>TOKENS</div>
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 15, fontWeight: 800, color: "#fff" }}>{userPositions.length}</div>
                       </div>
                     </div>
-                  </>
-                ) : (
-                  <div style={{ padding: "16px", textAlign: "center", fontFamily: "'Inter'", fontSize: 12, color: "#555" }}>No one on stage</div>
-                )}
+                    {userPositions.length > 0 ? userPositions.map((pos, i) => {
+                      const pp = pos.entry > 0 ? ((pos.current - pos.entry) / pos.entry * 100) : 0;
+                      const posToken = liveTokens.find(c => c.ca === pos.mint);
+                      return (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.02)" }}>
+                          {posToken?.imageUrl ? (
+                            <img src={posToken.imageUrl} style={{ width: 18, height: 18, borderRadius: 5, objectFit: "cover", flexShrink: 0, border: "1px solid rgba(255,255,255,0.04)" }} />
+                          ) : (
+                            <div style={{ width: 18, height: 18, borderRadius: 5, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 800, fontSize: 7, color: "rgba(255,255,255,0.25)", flexShrink: 0 }}>{(pos.coin || "?")[0]}</div>
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 700, color: "#fff" }}>{pos.coin}</div>
+                            <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "rgba(255,255,255,0.2)" }}>{pos.tokenAmount ? `${pos.tokenAmount.toLocaleString()} tkns` : `${pos.amount.toFixed(3)} SOL`}</div>
+                          </div>
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 700, color: pp >= 0 ? "#00ff88" : "#ff4444" }}>{pp >= 0 ? "+" : ""}{pp.toFixed(1)}%</span>
+                          <button onClick={() => handleSell(pos.mint)} style={{ padding: "2px 5px", borderRadius: 4, border: "1px solid rgba(255,68,68,0.12)", background: "rgba(255,68,68,0.04)", color: "#ff4444", fontFamily: "'Inter'", fontWeight: 700, fontSize: 7, cursor: "pointer" }}>Sell</button>
+                        </div>
+                      );
+                    }) : (
+                      <div style={{ fontFamily: "'Inter'", fontSize: 9, color: "rgba(255,255,255,0.15)", textAlign: "center", padding: 16 }}>No positions yet</div>
+                    )}
+                  </>)}
 
-                {/* Queue */}
-                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>QUEUE ({queue.length})</div>
-                {queue.length > 0 ? queue.map((q, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 700, color: "#00d4ff", width: 18 }}>{i + 1}.</span>
-                    <span style={{ fontFamily: "'Inter'", fontSize: 12, fontWeight: 600, color: "#fff", flex: 1, letterSpacing: -0.2 }}>{q.name}</span>
-                    <span style={{ fontFamily: "'Inter'", fontSize: 11, color: "#666", letterSpacing: -0.2 }}>→ {q.coin.ticker}</span>
-                  </div>
-                )) : (
-                  <div style={{ fontFamily: "'Inter'", fontSize: 11, color: "#555", padding: "8px 6px" }}>No one in queue</div>
-                )}
-
-                {/* In the room */}
-                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginTop: 14, marginBottom: 8, letterSpacing: 0.5 }}>IN THE ROOM ({liveCount})</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-                  {PFP_NAMES.slice(0, 12).map((name, i) => (
-                    <div key={i} style={{ width: 32, height: 32, borderRadius: "50%", background: `hsl(${(i * 47 + 120) % 360},70%,50%)`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter'", fontWeight: 800, fontSize: 10, color: "#fff", border: "2px solid rgba(8,4,12,0.97)" }}>{name[0].toUpperCase()}</div>
-                  ))}
+                  {miniTab === "fund" && (() => {
+                    const addr = _wallets?.[0]?.address || getWalletAddress() || "";
+                    const shortAddr = addr ? `${addr.slice(0, 5)}...${addr.slice(-4)}` : "—";
+                    const deficit = lowBal ? Math.max(0, usdToSol(quickBuyUSD || 5, solPrice) - walletBalance) : 0;
+                    return (<>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 700, color: "rgba(0,212,255,0.7)", letterSpacing: 0.8 }}>FUND WALLET</span>
+                        <button onClick={() => setMiniTab("trade")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 0 }}><Icon d={Icons.x} size={9} color="#555" /></button>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                        <div>
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 15, fontWeight: 800, color: "#fff" }}>{walletBalance.toFixed(4)}</span>
+                          <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "rgba(255,255,255,0.3)", marginLeft: 3 }}>SOL</span>
+                        </div>
+                        {lowBal && <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, fontWeight: 700, color: "#ffaa00", padding: "1px 4px", borderRadius: 3, background: "rgba(255,170,0,0.08)", border: "1px solid rgba(255,170,0,0.15)" }}>NEED</span>}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "rgba(255,255,255,0.25)" }}>${(walletBalance * solPrice).toFixed(2)} USD</span>
+                        {lowBal && <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "#ffaa00" }}>+{deficit.toFixed(4)} SOL</span>}
+                      </div>
+                      {/* Address row */}
+                      <div onClick={() => { if (!addr) return; navigator.clipboard.writeText(addr); setAddrCopied(true); setTimeout(() => setAddrCopied(false), 1500); }} style={{
+                        display: "flex", alignItems: "center", gap: 4, padding: "5px 6px", borderRadius: 6,
+                        background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)",
+                        cursor: "pointer", marginBottom: 8, transition: "all 0.15s",
+                      }}>
+                        <Icon d={Icons.wallet} size={9} color="rgba(255,255,255,0.2)" />
+                        <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 8, color: "rgba(255,255,255,0.35)", flex: 1 }}>{shortAddr}</span>
+                        <span style={{ fontFamily: "'Inter'", fontSize: 7, fontWeight: 600, color: addrCopied ? "#00ff88" : "rgba(255,255,255,0.2)" }}>{addrCopied ? "Copied!" : ""}</span>
+                        <Icon d={addrCopied ? Icons.check : Icons.copy} size={8} color={addrCopied ? "#00ff88" : "rgba(255,255,255,0.15)"} />
+                      </div>
+                      {/* Action buttons */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <button onClick={async () => {
+                          const provider = window.phantom?.solana;
+                          if (!provider) { window.open("https://phantom.app/", "_blank"); return; }
+                          try {
+                            setFundStatus("pending");
+                            const resp = await provider.connect();
+                            const fromPubkey = resp.publicKey;
+                            const toPubkey = new PublicKey(addr);
+                            const lamports = deficit > 0 ? Math.ceil((deficit + 0.005) * LAMPORTS_PER_SOL) : Math.ceil(0.05 * LAMPORTS_PER_SOL);
+                            const connection = new Connection("https://api.mainnet-beta.solana.com");
+                            const { blockhash } = await connection.getLatestBlockhash();
+                            const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey, toPubkey, lamports }));
+                            tx.feePayer = fromPubkey;
+                            tx.recentBlockhash = blockhash;
+                            const { signature } = await provider.signAndSendTransaction(tx);
+                            setFundStatus("sent");
+                            setChatMessages(p => [...p, { user: "trench.fm", msg: `Funding TX sent! ${(lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL incoming` }]);
+                            setTimeout(() => { setFundStatus(null); getWalletBalance(_wallets?.[0]?.address || getWalletAddress()).then(b => { if (typeof b === "number") setWalletBalance(b); }); }, 8000);
+                          } catch (e) {
+                            setFundStatus(e.message?.includes("User rejected") ? null : "error");
+                            if (fundStatus === "error") setTimeout(() => setFundStatus(null), 3000);
+                          }
+                        }} style={{
+                          width: "100%", padding: "6px 0", borderRadius: 6, border: "none", cursor: "pointer",
+                          background: fundStatus === "sent" ? "linear-gradient(135deg,#00ff88,#00cc66)" : fundStatus === "error" ? "linear-gradient(135deg,#ff4444,#cc2222)" : "linear-gradient(135deg,#7B61FF,#6246ea)", color: "#fff",
+                          fontFamily: "'Inter'", fontSize: 9, fontWeight: 700, letterSpacing: -0.3,
+                          display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                          boxShadow: "0 0 12px rgba(123,97,255,0.25), 0 2px 4px rgba(0,0,0,0.3)",
+                          opacity: fundStatus === "pending" ? 0.7 : 1, transition: "all 0.2s",
+                        }}>
+                          {fundStatus === "pending" ? (<><div style={{ width: 10, height: 10, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.6s linear infinite" }} />Confirm in Phantom...</>) : fundStatus === "sent" ? (<><Icon d={Icons.check} size={10} color="#fff" />Sent!</>) : fundStatus === "error" ? "Failed — try again" : (<><span style={{ fontSize: 11 }}>👻</span> Fund via Phantom</>)}
+                        </button>
+                        <button onClick={() => { if (addr) window.open(`https://solscan.io/account/${addr}`, "_blank"); }} style={{
+                          width: "100%", padding: "5px 0", borderRadius: 6, cursor: "pointer",
+                          background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
+                          color: "rgba(255,255,255,0.35)", fontFamily: "'Inter'", fontSize: 8, fontWeight: 600,
+                          display: "flex", alignItems: "center", justifyContent: "center", gap: 3,
+                        }}>
+                          View on Solscan
+                          <svg width="6" height="6" viewBox="0 0 6 6"><path d="M1 5L5 1M5 1H2M5 1v3" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        </button>
+                      </div>
+                    </>);
+                  })()}
                 </div>
-                <div style={{ fontFamily: "'Inter'", fontSize: 10, color: "#555", letterSpacing: -0.2 }}>+{Math.max(0, liveCount - 12)} more</div>
-              </>
-            )}
-
-            {/* ═══ ACTIVITY TAB ═══ */}
-            {consoleTab === "activity" && (
-              <>
-                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginBottom: 8, letterSpacing: 0.5 }}>LIVE FEED</div>
-                {activityFeed.slice(-15).reverse().map((item, i) => (
-                  <div key={i} style={{
-                    display: "flex", alignItems: "center", gap: 6, padding: "7px 6px",
-                    borderBottom: "1px solid rgba(255,255,255,0.03)",
-                    animation: i === 0 ? "slideIn 0.3s ease" : "none",
-                  }}>
-                    <Icon d={item.action === "bought" ? Icons.zap : Icons.trending} size={12} color={item.action === "bought" ? "#00d4ff" : "#00ff88"} />
-                    <div style={{ flex: 1, fontFamily: "'Inter'", fontSize: 11, letterSpacing: -0.2, color: "#ccc" }}>
-                      <span style={{ fontWeight: 700, color: "#fff" }}>{item.user}</span>
-                      <span style={{ color: "#555" }}> {item.action === "bought" ? "bought" : "up"} </span>
-                      <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 600, color: item.action === "bought" ? "#00d4ff" : "#00ff88" }}>{item.amount}</span>
-                      <span style={{ color: "#555" }}> {item.coin}</span>
-                    </div>
-                    <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 9, color: "#444", letterSpacing: -0.3 }}>{Math.floor(i * 3 + 2)}s</span>
-                  </div>
-                ))}
-                {activityFeed.length === 0 && <div style={{ fontFamily: "'Inter'", fontSize: 12, color: "#555", textAlign: "center", padding: 20 }}>No activity yet</div>}
-
-                {/* Stats */}
-                <div style={{ fontFamily: "'Press Start 2P'", fontSize: 8, color: "rgba(0,212,255,0.6)", marginTop: 14, marginBottom: 8, letterSpacing: 0.5 }}>SESSION</div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {[
-                    { label: "Volume", value: `$${(callVolume / 1000).toFixed(1)}K` },
-                    { label: "Trades", value: `${activityFeed.length}` },
-                    { label: "Revenue", value: `$${platformRevenue.toFixed(0)}` },
-                  ].map((s, i) => (
-                    <div key={i} style={{ flex: 1, padding: "10px 8px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.06)", textAlign: "center" }}>
-                      <div style={{ fontFamily: "'Inter'", fontSize: 9, fontWeight: 600, color: "#555", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>{s.label}</div>
-                      <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: -0.5 }}>{s.value}</div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ═══ STEP UP MODAL ═══ */}
-      {showStepUpModal && (
-        <div data-ui="1" style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 50, animation: "modalUp 0.3s ease" }}>
-          <div style={{ background: "rgba(0,0,0,0.5)", position: "absolute", top: -1000, left: 0, right: 0, bottom: 0 }} onClick={() => setShowStepUpModal(false)} />
-          <div style={{ background: "rgba(12,6,16,0.98)", backdropFilter: "blur(24px)", borderRadius: "20px 20px 0 0", padding: "24px 20px", paddingBottom: "max(24px, env(safe-area-inset-bottom))", border: "1px solid rgba(255,255,255,0.06)", borderBottom: "none", position: "relative" }}>
-            {/* Handle bar */}
-            <div style={{ width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.15)", margin: "-8px auto 16px" }} />
-            <div style={{ textAlign: "center", fontFamily: "'Inter'", fontWeight: 800, fontSize: 18, color: "#fff", marginBottom: 4, letterSpacing: -0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <Icon d={Icons.mic} size={20} color="#ff2d78" />Step Up
-            </div>
-            <div style={{ textAlign: "center", fontFamily: "'Inter'", fontSize: 12, color: "#555", marginBottom: 18 }}>{liveCount} people are listening</div>
-
-            {/* CA input */}
-            <div style={{ fontFamily: "'Inter'", fontWeight: 600, fontSize: 10, color: "#666", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Contract Address</div>
-            <input value={stepUpCA} onChange={e => setStepUpCA(e.target.value)} placeholder="Paste CA address..." style={{ width: "100%", padding: "12px 14px", borderRadius: 12, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'JetBrains Mono'", fontSize: 13, fontWeight: 500, outline: "none", boxSizing: "border-box", marginBottom: 4, letterSpacing: -0.3 }} />
-            {stepUpCA.length > 3 && (
-              <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#00ff88", padding: "4px 2px 8px", animation: "slideIn 0.2s ease", letterSpacing: -0.3, display: "flex", alignItems: "center", gap: 4 }}>
-                <Icon d={Icons.check} size={11} color="#00ff88" />
-                {(() => { const m = COINS.find(c => stepUpCA.toLowerCase().includes(c.ticker.replace("$","").toLowerCase())); return m ? `${m.ticker} · ${m.mcap} · ${m.change}` : `${COINS[0].ticker} · ${COINS[0].mcap} · ${COINS[0].change}`; })()}
               </div>
-            )}
 
-            {/* Thesis */}
-            <div style={{ fontFamily: "'Inter'", fontWeight: 600, fontSize: 10, color: "#666", marginBottom: 6, marginTop: 12, textTransform: "uppercase", letterSpacing: 1 }}>Your Thesis</div>
-            <textarea value={stepUpThesis} onChange={e => { if (e.target.value.length <= 280) setStepUpThesis(e.target.value); }} placeholder={`Why should they buy this?`} rows={3} style={{ width: "100%", padding: "12px 14px", borderRadius: 12, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontFamily: "'Inter'", fontSize: 13, fontWeight: 400, outline: "none", resize: "none", boxSizing: "border-box", lineHeight: 1.6, letterSpacing: -0.2 }} />
-            <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: stepUpThesis.length > 250 ? "#ff2d78" : "#444", textAlign: "right", marginTop: 3, letterSpacing: -0.3 }}>{stepUpThesis.length}/280</div>
-
-            {/* Submit */}
-            <button onClick={() => handleStepUp(stepUpCA, stepUpThesis)} disabled={!stepUpCA.trim() || !stepUpThesis.trim()} style={{ width: "100%", padding: "14px", borderRadius: 14, border: "none", background: stepUpCA.trim() && stepUpThesis.trim() ? "linear-gradient(135deg,#ff2d78,#ff6622)" : "rgba(255,255,255,0.06)", color: stepUpCA.trim() && stepUpThesis.trim() ? "#fff" : "#444", fontFamily: "'Inter'", fontWeight: 800, fontSize: 15, cursor: stepUpCA.trim() && stepUpThesis.trim() ? "pointer" : "default", marginTop: 14, letterSpacing: -0.3, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, transition: "all 0.2s ease" }}>
-              <Icon d={speakerInfo ? Icons.users : Icons.mic} size={16} color={stepUpCA.trim() && stepUpThesis.trim() ? "#fff" : "#444"} />
-              {speakerInfo ? "Join Queue" : "Take the Mic"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ═══ QUICK BUY TOOLTIP — select → confirm, no misclicks ═══ */}
-      {showBuySheet && speakerInfo && (
-        <div data-ui="1" style={{ position: "absolute", bottom: 56, right: 8, zIndex: 50, width: 178, animation: "slideIn 0.15s cubic-bezier(0.16, 1, 0.3, 1)" }}>
-          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }} onClick={() => { setShowBuySheet(false); setQuickBuyUSD(null); }} />
-          <div style={{ background: "rgba(12,8,18,0.88)", backdropFilter: "blur(16px) saturate(1.3)", WebkitBackdropFilter: "blur(16px) saturate(1.3)", borderRadius: 12, padding: "8px 8px 6px", border: "1px solid rgba(0,255,136,0.1)", boxShadow: "0 4px 20px rgba(0,0,0,0.6)" }}>
-            {/* Header: ticker + change */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontFamily: "'Inter'", fontWeight: 800, fontSize: 11, color: "#fff", letterSpacing: -0.3 }}>{speakerInfo.coin.ticker}</span>
-              <span style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: speakerInfo.coin.positive ? "#00ff88" : "#ff4444", letterSpacing: -0.3 }}>{speakerInfo.coin.change}</span>
-            </div>
-            {/* Amount row — tap to select */}
-            <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
-              {[5, 10, 25, 50].map(usd => (
-                <button key={usd} onClick={() => setQuickBuyUSD(quickBuyUSD === usd ? null : usd)} style={{
-                  flex: 1, padding: "7px 0", borderRadius: 7, cursor: "pointer",
-                  fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 700, letterSpacing: -0.5,
-                  border: quickBuyUSD === usd ? "1.5px solid #00ff88" : "1px solid rgba(255,255,255,0.06)",
-                  background: quickBuyUSD === usd ? "rgba(0,255,136,0.12)" : "rgba(255,255,255,0.03)",
-                  color: quickBuyUSD === usd ? "#00ff88" : "#888",
-                  transition: "all 0.12s",
-                }}>${usd}</button>
-              ))}
-            </div>
-            {/* Confirm button — only active when amount selected */}
-            <button onClick={() => { if (quickBuyUSD) handleQuickBuy(quickBuyUSD); }} disabled={!quickBuyUSD} style={{
-              width: "100%", padding: "8px 0", borderRadius: 8, border: "none",
-              background: quickBuyUSD ? "linear-gradient(135deg,#00ff88,#00cc66)" : "rgba(255,255,255,0.03)",
-              color: quickBuyUSD ? "#000" : "#333",
-              fontFamily: "'Inter'", fontWeight: 800, fontSize: 12, cursor: quickBuyUSD ? "pointer" : "default",
-              letterSpacing: -0.3, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-              transition: "all 0.15s",
-            }}>
-              {quickBuyUSD ? <><Icon d={Icons.zap} size={11} color="#000" />Buy ${quickBuyUSD} {speakerInfo.coin.ticker}</> : "Select amount"}
-            </button>
-            {/* Balance hint */}
-            <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 7, color: "#333", textAlign: "center", marginTop: 4, letterSpacing: -0.2 }}>${(walletBalance * solPrice).toFixed(0)} bal · 1% → {speakerInfo.name}</div>
-          </div>
-          {/* Tooltip arrow */}
-          <div style={{ position: "absolute", bottom: -5, right: 38, width: 10, height: 10, background: "rgba(12,8,18,0.88)", transform: "rotate(45deg)", border: "1px solid rgba(0,255,136,0.1)", borderTop: "none", borderLeft: "none" }} />
-        </div>
-      )}
-
-      {/* ═══ FLOATING POSITION CARD ═══ */}
-      {userPositions.length > 0 && !consoleOpen && (
-        <div data-ui="1" style={{ position: "absolute", bottom: 70, right: 10, zIndex: 15 }}>
-          {userPositions.slice(-1).map((pos, i) => {
-            const pnl = ((pos.current - pos.entry) / pos.entry * 100);
-            const pnlColor = pnl >= 0 ? "#00ff88" : "#ff4444";
-            return (
-              <div key={i} style={{ background: "rgba(8,4,12,0.9)", backdropFilter: "blur(16px)", borderRadius: 12, padding: "8px 12px", border: `1px solid ${pnl >= 0 ? "rgba(0,255,136,0.15)" : "rgba(255,68,68,0.15)"}`, animation: "slideIn 0.3s ease", boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontFamily: "'Inter'", fontWeight: 700, fontSize: 12, color: "#fff", letterSpacing: -0.3 }}>{pos.coin}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 700, fontSize: 11, color: pnlColor, letterSpacing: -0.3 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(1)}%</span>
-                </div>
-                <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#666", letterSpacing: -0.3, marginTop: 2 }}>{pos.amount.toFixed(2)} SOL <span style={{ color: pnlColor }}>${(pos.amount * solPrice * (1 + pnl/100)).toFixed(0)}</span></div>
+              {/* Tab bar — always visible shell (Game Boy D-pad) */}
+              <div style={{
+                display: "flex", height: 30,
+                borderTop: "1px solid rgba(255,255,255,0.04)",
+                background: "linear-gradient(180deg, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.18) 100%)",
+                position: "relative",
+              }}>
+                {[
+                  { id: "home", icon: Icons.trophy, label: "Top", accent: "#ffb800", glow: "rgba(255,184,0,0.5)" },
+                  { id: "trade", icon: Icons.zap, label: "Trade", center: true, accent: "#00d4ff", glow: "rgba(0,212,255,0.5)" },
+                  { id: "bag", icon: Icons.wallet, label: miniTab === "fund" ? "Fund" : "Bag", accent: miniTab === "fund" ? "#00d4ff" : "#c68642", glow: miniTab === "fund" ? "rgba(0,212,255,0.5)" : "rgba(198,134,66,0.5)" },
+                ].map(t => {
+                  const active = miniTab === t.id || (t.id === "bag" && miniTab === "fund");
+                  const lit = active && miniOpen; // only "lit up" when open
+                  return (
+                    <button key={t.id} onClick={() => { if (t.id === "bag" && miniTab === "fund" && miniOpen) { setMiniTab("bag"); } else if (active && miniOpen) { setMiniOpen(false); } else { setMiniTab(t.id || "home"); setMiniOpen(true); } }} style={{
+                      flex: 1, border: "none", cursor: "pointer", padding: 0,
+                      background: lit ? `${t.accent}08` : "transparent",
+                      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 0,
+                      transition: "all 0.2s", position: "relative",
+                    }}>
+                      {/* Active indicator line — only when console is open */}
+                      {lit && <div style={{ position: "absolute", top: 0, left: "20%", right: "20%", height: 2, borderRadius: 1, background: t.accent, boxShadow: `0 0 8px ${t.glow}`, transition: "all 0.2s" }} />}
+                      {/* Expand chevron on active tab when collapsed */}
+                      {active && !miniOpen && (
+                        <svg width="10" height="5" viewBox="0 0 10 5" style={{ marginBottom: -1, animation: "gentleBounce 2s ease-in-out infinite" }}>
+                          <path d="M1 4.5 L5 1 L9 4.5" fill="none" stroke={t.accent} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
+                        </svg>
+                      )}
+                      {t.center ? (
+                        <div style={{
+                          width: 24, height: 16, borderRadius: 5,
+                          background: lit ? `linear-gradient(135deg, ${t.accent}, ${t.accent}88)` : "rgba(255,255,255,0.04)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          boxShadow: lit ? `0 0 12px ${t.glow}` : "none",
+                          border: lit ? "none" : "1px solid rgba(255,255,255,0.06)",
+                          transition: "all 0.2s",
+                        }}>
+                          <Icon d={t.icon} size={10} color={lit ? "#fff" : "rgba(255,255,255,0.25)"} />
+                        </div>
+                      ) : (
+                        <Icon d={t.icon} size={11} color={lit ? t.accent : "rgba(255,255,255,0.15)"} style={lit ? { filter: `drop-shadow(0 0 4px ${t.glow})` } : {}} />
+                      )}
+                      <span style={{
+                        fontFamily: "'Inter'", fontSize: 6, fontWeight: lit ? 700 : 500,
+                        color: lit ? t.accent : "rgba(255,255,255,0.15)",
+                        letterSpacing: 0.3, transition: "all 0.15s",
+                      }}>{t.label}</span>
+                    </button>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-      )}
 
+            </div>
+          </div>
+        </div>
+        );
+      })()}
       {/* ═══ REACTION BURSTS ═══ */}
       {reactionBursts.map(b => (
         <div key={b.id} style={{ position: "absolute", bottom: 80, left: `${b.x}%`, zIndex: 20, animation: "floatUp 2s ease-out forwards", pointerEvents: "none" }}>

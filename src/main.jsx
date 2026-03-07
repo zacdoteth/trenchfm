@@ -1,4 +1,4 @@
-import { createRoot } from 'react-dom/client'
-import PodiumTeleport from './PodiumTeleport.jsx'
+import { createRoot } from "react-dom/client";
+import App from "./App.jsx";
 
-createRoot(document.getElementById('root')).render(<PodiumTeleport />)
+createRoot(document.getElementById("root")).render(<App />);
